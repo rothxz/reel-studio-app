@@ -8,17 +8,17 @@
 
 Timeline editing, trending effects, auto captions and one-click background removal, with AI that runs on your device.
 
-[![Latest release](https://img.shields.io/github/v/release/rothxz/reel-studio-desktop?label=desktop&color=111111)](https://github.com/rothxz/reel-studio-desktop/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/rothxz/reel-studio-desktop/total?color=111111)](https://github.com/rothxz/reel-studio-desktop/releases)
+[![Latest release](https://img.shields.io/github/v/release/rothxz/reel-studio-app?label=desktop&color=111111)](https://github.com/rothxz/reel-studio-app/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/rothxz/reel-studio-app/total?color=111111)](https://github.com/rothxz/reel-studio-app/releases)
 
-[![macOS](https://img.shields.io/badge/macOS-Download-1f1f1f?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-desktop/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-Download-1f1f1f?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-desktop/releases/latest)
-[![Linux](https://img.shields.io/badge/Linux-Download-1f1f1f?style=for-the-badge&logo=linux&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-desktop/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-Download-1f1f1f?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-Download-1f1f1f?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux-Download-1f1f1f?style=for-the-badge&logo=linux&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
 <br />
 [![Google Play](https://img.shields.io/badge/Google_Play-Get_it-1f1f1f?style=for-the-badge&logo=googleplay&logoColor=white&labelColor=000000)](https://play.google.com/store/apps/details?id=com.reelstudio.app)
 [![App Store](https://img.shields.io/badge/App_Store-In_review-1f1f1f?style=for-the-badge&logo=appstore&logoColor=white&labelColor=000000)](#download)
 
-[Website](https://reel-studio.expo.app) · [All releases](https://github.com/rothxz/reel-studio-desktop/releases)
+[Website](https://reel-studio.expo.app) · [All releases](https://github.com/rothxz/reel-studio-app/releases)
 
 <br />
 
@@ -30,10 +30,10 @@ Timeline editing, trending effects, auto captions and one-click background remov
 
 | Platform | Get it | Notes |
 | --- | --- | --- |
-| **macOS** (Apple Silicon) | [`Reel-Studio-<version>-mac-arm64.dmg`](https://github.com/rothxz/reel-studio-desktop/releases/latest) | Signed & notarized by Apple |
-| **macOS** (Intel) | [`Reel-Studio-<version>-mac-x64.dmg`](https://github.com/rothxz/reel-studio-desktop/releases/latest) | Signed & notarized by Apple |
-| **Windows** 10 / 11 (64-bit) | [`Reel-Studio-<version>-win-x64.exe`](https://github.com/rothxz/reel-studio-desktop/releases/latest) | Installer; see [first launch](#first-launch) |
-| **Linux** (x86_64) | [`Reel-Studio-<version>-linux-x86_64.AppImage`](https://github.com/rothxz/reel-studio-desktop/releases/latest) | Portable AppImage, no install |
+| **macOS** (Apple Silicon) | [`Reel-Studio-<version>-mac-arm64.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest) | Signed & notarized by Apple |
+| **macOS** (Intel) | [`Reel-Studio-<version>-mac-x64.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest) | Signed & notarized by Apple |
+| **Windows** 10 / 11 (64-bit) | [`Reel-Studio-<version>-win-x64.exe`](https://github.com/rothxz/reel-studio-app/releases/latest) | Installer; see [first launch](#first-launch) |
+| **Linux** (x86_64) | [`Reel-Studio-<version>-linux-x86_64.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest) | Portable AppImage, no install |
 | **Android** | [Google Play](https://play.google.com/store/apps/details?id=com.reelstudio.app) | Available now |
 | **iPhone** | App Store | In review, coming soon |
 
@@ -116,7 +116,7 @@ English · ខ្មែរ (Khmer) · Tiếng Việt · 简体中文 · Bahasa I
 
 ## Feedback
 
-Found a bug or have an idea? [Open an issue](https://github.com/rothxz/reel-studio-desktop/issues). Please include your OS, the app version and steps to reproduce.
+Found a bug or have an idea? [Open an issue](https://github.com/rothxz/reel-studio-app/issues). Please include your OS, the app version and steps to reproduce.
 
 ## About this repository
 
