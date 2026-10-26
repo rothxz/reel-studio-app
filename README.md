@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/icon.png" width="112" alt="Reel Studio icon" />
+<img src="docs/images/app-icon-rounded.png" width="112" alt="Reel Studio icon" />
 
 # Reel Studio
 
