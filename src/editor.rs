@@ -22,9 +22,10 @@ use crate::history::History;
 use crate::model::{self, Clip, MediaItem, Micros, Project, SECOND, Side, TrackType};
 use crate::prefs::Prefs;
 use crate::projects;
+use crate::selection::Selection;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
-use crate::ui::timeline_edit::{ClipDrag, MediaDrop};
+use crate::ui::timeline_edit::{ClipDrag, Marquee, MediaDrop};
 
 actions!(
     editor,
@@ -109,6 +110,8 @@ pub enum Drag {
     },
     /// A timeline clip moved or trimmed (`ui/timeline_edit.rs`).
     Clip(Box<ClipDrag>),
+    /// A rubber band over the lanes (⇧ / ⌘ + drag on empty space).
+    Marquee(Box<Marquee>),
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -203,7 +206,7 @@ pub struct Editor {
     pub(crate) project: Project,
     pub(crate) engine: Engine,
     pub(crate) media: Vec<MediaItem>,
-    pub(crate) selected: Option<String>,
+    pub(crate) selected: Selection,
     pub(crate) playhead: Micros,
     /// Timeline zoom, pixels per second.
     pub(crate) pps: f32,
@@ -306,7 +309,7 @@ impl Editor {
             project,
             engine,
             media: vec![],
-            selected: None,
+            selected: Selection::default(),
             playhead: 0,
             pps: 80.,
             scroll_x: 0.,
@@ -408,7 +411,7 @@ impl Editor {
 
     pub fn selected_clip(&self) -> Option<(&model::Track, &Clip)> {
         self.selected
-            .as_deref()
+            .primary()
             .and_then(|id| self.project.find_clip(id))
     }
 
@@ -422,13 +425,8 @@ impl Editor {
         }
         self.playhead = self.playhead.min(self.project.duration);
         self.engine.seek(self.playhead);
-        if self
-            .selected
-            .as_deref()
-            .is_some_and(|id| self.project.find_clip(id).is_none())
-        {
-            self.selected = None;
-        }
+        let project = &self.project;
+        self.selected.retain(|id| project.find_clip(id).is_some());
         self.request_preview();
         cx.notify();
     }
@@ -537,7 +535,7 @@ impl Editor {
             },
             cx,
         );
-        self.selected = Some(id);
+        self.selected.set(id);
         cx.notify();
     }
 
@@ -574,7 +572,7 @@ impl Editor {
         self.project = project;
         self.history.clear();
         self.dirty = false;
-        self.selected = None;
+        self.selected.clear();
         self.inspector_entry = None;
         self.tool = Tool::Select;
         self.fullscreen = false;
@@ -885,7 +883,7 @@ impl Editor {
                 } else if self.tool == Tool::Split {
                     self.tool = Tool::Select;
                 } else {
-                    self.selected = None;
+                    self.selected.clear();
                 }
                 cx.notify();
             }
@@ -1007,25 +1005,49 @@ impl Editor {
         self.edit("Split Clip", false, None, |p| p.split_at(&id, at), cx);
     }
 
+    /// ⌫: every selected clip, as one undo step (the magnet closes the
+    /// main lane up when any was on it).
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone() else {
+        let ids: Vec<String> = self.deletable_selection();
+        if ids.is_empty() {
             return;
+        }
+        let main = ids.iter().any(|id| self.on_main_lane(id));
+        let label = if ids.len() == 1 {
+            "Delete Clip"
+        } else {
+            "Delete Clips"
         };
-        let main = self.on_main_lane(&id);
-        if self.edit(
-            "Delete Clip",
-            main,
-            None,
-            |p| p.delete_clip(&id).is_some(),
-            cx,
-        ) {
-            self.selected = None;
-            self.toast("Clip deleted", cx);
+        if self.edit(label, main, None, |p| p.delete_clips(&ids), cx) {
+            self.selected.clear();
+            self.toast(
+                if ids.len() == 1 {
+                    "Clip deleted".to_string()
+                } else {
+                    format!("{} clips deleted", ids.len())
+                },
+                cx,
+            );
         }
     }
 
+    /// The selected clips an edit may touch (not on a locked lane, not
+    /// locked themselves).
+    fn deletable_selection(&self) -> Vec<String> {
+        self.selected
+            .ids()
+            .iter()
+            .filter(|id| {
+                self.project
+                    .find_clip(id)
+                    .is_some_and(|(t, c)| !t.locked && !c.locked())
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn duplicate_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone() else {
+        let Some(id) = self.selected.primary().map(str::to_owned) else {
             return;
         };
         let main = self.on_main_lane(&id);
@@ -1041,7 +1063,7 @@ impl Editor {
             cx,
         );
         if copy.is_some() {
-            self.selected = copy;
+            self.selected.set_opt(copy);
             self.toast("Clip duplicated", cx);
         }
     }
@@ -1078,18 +1100,24 @@ impl Editor {
         self.edit(label, main, None, |p| p.trim_at(&id, now, side), cx);
     }
 
-    /// V: the clip stays on the timeline, dimmed; preview and export skip it.
+    /// V: the clip stays on the timeline, dimmed; preview and export skip
+    /// it. With several selected: all off while any is on, else all on.
     pub fn toggle_clip_active(&mut self, cx: &mut Context<Self>) {
-        let Some((_, clip)) = self.selected_clip() else {
+        let ids = self.deletable_selection();
+        if ids.is_empty() {
             return;
-        };
-        let (id, hidden) = (clip.id.clone(), !clip.hidden);
+        }
+        let hidden = !ids
+            .iter()
+            .all(|id| self.project.find_clip(id).is_some_and(|(_, c)| c.hidden));
         self.edit(
             "Deactivate Clip",
             false,
             None,
             |p| {
-                p.set_clip_hidden(&id, hidden);
+                for id in &ids {
+                    p.set_clip_hidden(id, hidden);
+                }
                 true
             },
             cx,
@@ -1144,7 +1172,7 @@ impl Editor {
         );
         match id {
             Some(id) => {
-                self.selected = Some(id);
+                self.selected.set(id);
                 self.toast("Clip pasted", cx);
             }
             None => self.toast("Nothing to paste — copy a clip first", cx),
@@ -1545,6 +1573,7 @@ impl Editor {
             }
             Drag::Scrub => self.scrub_to(e.position.x, cx),
             Drag::Clip(_) => self.update_clip_drag(e.position, cx),
+            Drag::Marquee(_) => self.update_marquee(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Slider { key, apply } => {
                 let (key, apply) = (*key, apply.clone());

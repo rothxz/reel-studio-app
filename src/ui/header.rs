@@ -89,7 +89,7 @@ impl Editor {
                     .on_click(cx.listener(|ed, _, _, cx| {
                         // The project sheet (rename, details) isn't ported
                         // yet: the inspector's Details shows the project.
-                        ed.selected = None;
+                        ed.selected.clear();
                         cx.notify();
                     }))
                     .child(

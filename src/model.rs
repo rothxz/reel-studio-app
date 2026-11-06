@@ -836,12 +836,9 @@ impl Project {
     /// Removes these clips wherever they are (a lane's "Delete track").
     pub fn delete_clips(&mut self, ids: &[String]) -> bool {
         let mut any = false;
-        for t in &mut self.tracks {
-            let n = t.clips.len();
-            t.clips.retain(|c| !ids.contains(&c.id));
-            any |= t.clips.len() != n;
+        for id in ids {
+            any |= self.delete_clip(id).is_some();
         }
-        self.recompute_duration();
         any
     }
 

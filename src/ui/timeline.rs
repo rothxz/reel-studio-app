@@ -113,7 +113,7 @@ pub struct LaneLayout {
 }
 
 impl LaneLayout {
-    fn clip_top(&self, clip_id: &str) -> f32 {
+    pub fn clip_top(&self, clip_id: &str) -> f32 {
         let row = self.rows.get(clip_id).copied().unwrap_or(0);
         self.top + row as f32 * (self.row_height + LANE_GAP)
     }
@@ -550,7 +550,7 @@ impl Editor {
                 let inset = seams.get(&clip.id).copied().unwrap_or((0, 0));
                 let (el, slot, float) =
                     place(self, clip, track, 0., MAIN_TOP, MAIN_LANE_HEIGHT, inset, cx);
-                let selected = self.selected.as_deref() == Some(clip.id.as_str());
+                let selected = self.selected.contains(&clip.id);
                 if let Some(el) = el {
                     main_clips.push((selected, el));
                 }
@@ -567,8 +567,7 @@ impl Editor {
         let seam_buttons: Vec<AnyElement> = ordered
             .windows(2)
             .filter(|pair| {
-                let sel = self.selected.as_deref();
-                sel != Some(pair[0].id.as_str()) && sel != Some(pair[1].id.as_str())
+                !self.selected.contains(&pair[0].id) && !self.selected.contains(&pair[1].id)
             })
             .filter(|_| moving_id.is_none())
             .map(|pair| {
@@ -621,7 +620,7 @@ impl Editor {
                         (0, 0),
                         cx,
                     );
-                    let selected = self.selected.as_deref() == Some(clip.id.as_str());
+                    let selected = self.selected.contains(&clip.id);
                     if let Some(el) = el {
                         stack_clips.push((selected, el));
                     }
@@ -669,6 +668,24 @@ impl Editor {
                     .into_any_element(),
             ),
             None => {}
+        }
+        if let (Some(Drag::Marquee(m)), Some(b)) = (&self.drag, lanes) {
+            let x0 = f32::from(m.origin.x.min(m.to.x) - b.origin.x);
+            let y0 = f32::from(m.origin.y.min(m.to.y) - b.origin.y);
+            let w = f32::from((m.origin.x - m.to.x).abs());
+            let h = f32::from((m.origin.y - m.to.y).abs());
+            guides.push(
+                div()
+                    .absolute()
+                    .left(px(x0))
+                    .top(px(y0))
+                    .w(px(w))
+                    .h(px(h))
+                    .border_1()
+                    .border_color(rgba(0xffffffb3))
+                    .bg(rgba(0xffffff14))
+                    .into_any_element(),
+            );
         }
         if let Some(t) = self.hover.filter(|_| self.drag.is_none()) {
             guides.push(
@@ -799,12 +816,18 @@ impl Editor {
                     .overflow_hidden()
                     .cursor(cursor)
                     .child(self.measure("lanes"))
-                    // Empty space and the ruler: deselect and scrub.
+                    // Empty space and the ruler: deselect and scrub; with
+                    // ⇧ / ⌘ held below the ruler, a rubber band adds clips.
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ed, e: &MouseDownEvent, _, cx| {
                             ed.end_hover();
-                            ed.selected = None;
+                            if (e.modifiers.shift || e.modifiers.platform)
+                                && ed.start_marquee(e.position, cx)
+                            {
+                                return;
+                            }
+                            ed.selected.clear();
                             ed.drag = Some(Drag::Scrub);
                             ed.scrub_to(e.position.x, cx);
                         }),
@@ -937,7 +960,8 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = clip.id.clone();
-        let selected = self.selected.as_deref() == Some(clip.id.as_str());
+        let selected = self.selected.contains(&clip.id);
+        let single = self.selected.single() == Some(clip.id.as_str());
         let locked = track.locked || clip.locked();
         let hidden = clip.hidden || track.hidden;
         let box_x = g.x + g.inset.0;
@@ -1089,7 +1113,7 @@ impl Editor {
                 .rounded(px(3.))
                 .bg(rgba(0x0000008c))
         };
-        let handles = selected && !locked && !g.moving;
+        let handles = single && !locked && !g.moving;
         let handle = |side: Side, cx: &mut Context<Self>| {
             let id = id.clone();
             div()
@@ -1187,7 +1211,13 @@ impl Editor {
                         ed.split_clip_at(&down_id, t, cx);
                         return;
                     }
-                    ed.selected = Some(down_id.clone());
+                    if e.modifiers.shift || e.modifiers.platform {
+                        // ⇧ / ⌘ click: in or out of the selection, no move.
+                        ed.selected.toggle(&down_id);
+                        cx.notify();
+                        return;
+                    }
+                    ed.selected.set(down_id.clone());
                     ed.start_clip_drag(&down_id, ClipDragMode::Move, e.position, cx);
                 }),
             )
@@ -1199,7 +1229,13 @@ impl Editor {
                     }
                     cx.stop_propagation();
                     ed.end_hover();
-                    ed.selected = Some(menu_id.clone());
+                    // Inside a multi-selection it stays (the menu's Delete
+                    // takes them all); otherwise it alone.
+                    if ed.selected.contains(&menu_id) {
+                        ed.selected.add(menu_id.clone());
+                    } else {
+                        ed.selected.set(menu_id.clone());
+                    }
                     ed.open_clip_menu(&menu_id, e.position, cx);
                 }),
             )
@@ -1382,12 +1418,12 @@ impl Editor {
             return;
         }
         let on = !tracks.iter().all(|t| get(t));
-        if flag == LaneFlag::Locked
-            && on
-            && let Some(sel) = &self.selected
-            && tracks.iter().any(|t| t.clips.iter().any(|c| &c.id == sel))
-        {
-            self.selected = None;
+        if flag == LaneFlag::Locked && on {
+            let lane: Vec<String> = tracks
+                .iter()
+                .flat_map(|t| t.clips.iter().map(|c| c.id.clone()))
+                .collect();
+            self.selected.retain(|id| !lane.iter().any(|c| c == id));
         }
         let label = match flag {
             LaneFlag::Locked => "Lock Track",
