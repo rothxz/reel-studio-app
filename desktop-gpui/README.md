@@ -44,7 +44,15 @@ REEL_ENGINE_DIR=/path/to/reel-studio/modules/video-engine/cpp \
   cargo run --release --features cpp-engine
 
 cargo test                            # model + engine tests (either backend)
+
+# In the ~/Project workspace layout (reel-studio next to reel-studio-app),
+# .cargo/config.toml already points REEL_ENGINE_DIR there:
+cargo dev ~/Movies/a.mp4              # run --release --features cpp-engine
+cargo t                               # tests on the C++ engine
 ```
+
+Working on it: `/CLAUDE.md` is the context (rules, architecture, where each
+part of the old editor lives), and `docs/PARITY.md` tracks what's done.
 
 Keys: Space play/pause · S split · ⌫ delete · ←/→ one frame · Home start ·
 ⌘=/⌘- zoom · ⌘I import · ⌘O open project · ⌘S save project.
