@@ -53,8 +53,10 @@ isn't listed.
 
 - [x] Tab row (icon over label): Media, Audio, Text, Sticker, Effects,
   Transitions, Captions, Filter; sub-nav for tabs with several views
-  (Music / Sound / Voiceover, Add text / Text template, …). *Only Media has
-  content; the others say they're not in the native editor yet.*
+  (Music / Sound / Voiceover, Add text / Text template, …); a view with
+  categories (Video effects, Filter) folds them under its row in the side
+  nav (chevron). *Media, Effects and Filter have content; the others say
+  they're not in the native editor yet.*
 - [x] Media: Import button, item count, tile grid sized to the panel
   (min 104 px, 10 px gaps). Import / drop puts files in the library, not
   on the timeline; the library also lists every file the project uses.
@@ -67,11 +69,39 @@ isn't listed.
 - [ ] Audio: Music (catalog + search), Sound effects, Voiceover (record)
 - [ ] Text: Add text (Default, Draw), Text templates
 - [ ] Stickers: stickers, GIFs (catalog via the media proxy)
-- [ ] Effects: Video effects, Body effects (served catalog, downloaded
-  packages)
+- [~] Effects › Video effects: the served catalog (the catalog database's
+  effects table over REST), one category at a time (All, Trending,
+  Classic, the mood tabs), 30 rows per request, more as the grid scrolls
+  near its end; rows kept on disk (`effect-catalog.json`) so an offline
+  tab lists what was seen (with Retry); stale lists (10 min) start over
+  when the tab opens. None leads All. A pick adds a 3 s clip (≥ 1 s) on
+  the Effects lane at the playhead and selects it, so the next pick
+  replaces it; None deletes it; toasts "<name> on" / "Effect removed".
+  The picked tile is outlined; its sliders (Reset, a 0–100 slider per
+  served parameter, one undo step per drag; the preview follows a held
+  slider) are in the inspector, since its clip is selected. The effect's shader package is downloaded on first use
+  and renders in the player (see Player › effects). *No search field
+  yet (needs the text field). Body effects are left out, as the old
+  desktop build does (no on-device person matte).*
+- [x] Effect / filter tiles: the hosted previews from the asset host
+  (R2 bucket, `effect-previews/<key>`), downloaded once to
+  `<data>/cache/` (keys are content-hashed) on 4 worker threads, newest
+  request first; the first frame shown, the animated WebP / GIF plays on
+  hover (a handful of animations kept). Square tiles sized to the panel
+  (≥ 92 px), white ring + Adjust on the picked one, ⊕ on hover, plain
+  swatch until the picture arrives.
 - [ ] Transitions
 - [ ] Captions: Auto generate, Upload file (.srt/.vtt/.ass), Caption styles
-- [ ] Filters
+- [~] Filters: the categories (All, Featured, Portrait, Landscape, Food,
+  Film, Cinematic, Retro, Night, Style, B&W, Classic) and looks compiled
+  in at build time from the app checkout (never committed), tiles from
+  the asset host. A pick sets `Filters:<name>` on the selected video /
+  photo (else the main clip under the playhead), one per clip, keeping
+  the intensity already dialled in (new: 80); None removes it; the picked
+  tile's Adjust card has Intensity. Looks render in the player: Classic
+  ones through the engine's colour matrices, the rest from their
+  downloaded packages. *No search. On the Rust stand-in engine (no
+  `cpp-engine`) the Classic looks show unfiltered.*
 - [~] Tab strip overflow: the row scrolls sideways when the panel is
   narrow. *No ‹ › arrow buttons yet.*
 
@@ -83,9 +113,26 @@ isn't listed.
   the canvas background colour; the top clip drawn contain-fit in it.
   *No background blur / image yet.*
 - [x] "Player" panel title
+- [x] Effects and filters in the preview (`src/effects/`, Metal): the
+  shown clip's own video effect (distortion before its filter, blend
+  after) and filter (Classic: the engine's 4×5 matrix via the shim;
+  packaged: `fl_filter` mixed by intensity), then every effect-lane clip
+  under the playhead over the canvas (the clip fitted on the background
+  colour), lane order. Shader packages are fetched from the asset host
+  (`effect-packages/<key>`: an effect's key from its catalog row, a
+  filter's from the app's package manifest, compiled in), checked
+  against the hash in their key and cached on disk; the dialect is
+  rewritten to Metal with this app's own `fx_` / `fl_` helpers, compiled
+  once per look. Inputs as the old preview: time since the effect began
+  × Speed, intensity, progress, clip length, p1–p4. Runs on its own
+  thread (latest frame wins), re-run when the time, the document or a
+  held slider changes. Every hosted package compiles (`cargo t --
+  --ignored every_hosted_package`). *macOS only for now (other
+  platforms show frames unprocessed); GPU readback per frame, not yet
+  zero-copy; the background-blur effect and body effects aren't ported.*
 - [ ] Real compositor: all layers (overlays, images, text, stickers,
-  drawings), transforms, keyframes, masks, crop, blend modes, filters,
-  adjust, effects, transitions, background, cutout
+  drawings), transforms, keyframes, masks, crop, blend modes, adjust,
+  transitions, background, cutout
 - [ ] Audio playback in sync (mixer, volume, mute, fades)
 - [x] Timecode `HH:MM:SS:FF | HH:MM:SS:FF` (mono)
 - [x] Transport: ⏮ go to start, ◀ previous frame, ▶/⏸, ▶ next frame,
@@ -116,7 +163,11 @@ isn't listed.
   - [ ] Caption: Text (Basic, Fonts, Effects, Bubbles) · Captions (edit
     list) · Animation
   - [ ] Audio: Volume, Beats, Duration
-  - [ ] Effect: Effects (replace), Adjust
+  - [x] Effect: Effects › Adjust only, no second grid (looks are picked
+    in the browser): the effect's preview + name with Replace (opens the
+    browser's Video effects, where a pick replaces it), then Reset + its
+    sliders. An effect the catalog hasn't seen is fetched by name for its
+    sliders.
   - [ ] Sticker: Visual (Basic) · Drawing: Animation
 - [~] Shared controls: section heading with reset, label row, slider row
   (any slider: drag anywhere, live value, commit on release), read-out box,
@@ -231,14 +282,17 @@ isn't listed.
 - [x] Insert media at the playhead, split (reversed / freeze aware), delete,
   speed, delete left/right (trims the source window like `trimmedSource`),
   duplicate, paste, deactivate (clip `hidden`), lane flags, canvas ratio
+- [x] Effects on the document: `effects` (`EffectInstance`: id, type,
+  enabled, parameters) on clips; an effect-lane clip (`<project>-effect-1`,
+  "Effects 1", made on first use, with a default `transform`); one
+  `Overlays:` / `Filters:` per clip; slider edits coalesce per effect
 - [x] Main track magnet + linkage as one document function
   (`model::with_magnet`, the old `withMagnet`): re-packs the main lane by
   out-transition overlap and carries linked clips
 - [x] Undo/redo: document snapshots, one step per gesture (a quick run of
   edits to the same thing merges, 400 ms, 200 steps). *Split doesn't yet
   split keyframes / motion paths / speed curves per half.*
-- [ ] Keyframes, transforms, masks, crop, adjust, filters, effects,
-  transitions, text, stickers, drawings, captions, audio volume/fades,
+- [ ] Keyframes, transforms, masks, crop, adjust, transitions, text, stickers, drawings, captions, audio volume/fades,
   speed curves, freeze, reverse (baked copy), extract audio
 - [ ] Media relink for projects from the web app
 

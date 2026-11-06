@@ -290,9 +290,37 @@ impl Clip {
         }
     }
 
+    /// The clip's effects (video effects, filters, …), in order.
+    pub fn effects(&self) -> Vec<EffectInstance> {
+        self.extra
+            .get("effects")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    fn set_effects(&mut self, effects: &[EffectInstance]) {
+        self.extra.insert(
+            "effects".into(),
+            serde_json::to_value(effects).unwrap_or_else(|_| Value::Array(vec![])),
+        );
+    }
+
+    /// The first effect whose type starts with `prefix` (`Overlays:` /
+    /// `Filters:`): the one that's on.
+    pub fn effect_with(&self, prefix: &str) -> Option<EffectInstance> {
+        self.effects()
+            .into_iter()
+            .find(|e| e.kind.starts_with(prefix))
+    }
+
     pub fn label(&self) -> String {
         if let Some(text) = &self.text {
             return text.clone();
+        }
+        if self.kind == "effect"
+            && let Some(e) = self.effects().first()
+        {
+            return e.name().to_string();
         }
         self.source
             .as_deref()
@@ -353,6 +381,59 @@ pub enum Side {
     Start,
     End,
 }
+
+/// One effect on a clip (`EffectInstance`): a video effect
+/// (`Overlays:<name>`), a filter (`Filters:<name>`), …; its sliders 0–100
+/// in `parameters`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EffectInstance {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub parameters: Map<String, Value>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl EffectInstance {
+    /// A new effect of type `kind` with these parameters.
+    pub fn new(kind: String, params: &[(String, f64)]) -> Self {
+        EffectInstance {
+            id: new_id("fx"),
+            kind,
+            enabled: true,
+            parameters: params
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::from(*v)))
+                .collect(),
+            extra: Map::new(),
+        }
+    }
+
+    /// "Overlays:Glitch" → "Glitch".
+    pub fn name(&self) -> &str {
+        self.kind
+            .split_once(':')
+            .map_or(self.kind.as_str(), |(_, n)| n)
+    }
+
+    /// A numeric parameter.
+    pub fn param(&self, id: &str) -> Option<f64> {
+        self.parameters.get(id).and_then(Value::as_f64)
+    }
+}
+
+/// A new effect-lane clip lasts this long from the playhead (at least
+/// `MIN_EFFECT_CLIP`, even near the end).
+pub const EFFECT_CLIP_LENGTH: Micros = 3 * SECOND;
+pub const MIN_EFFECT_CLIP: Micros = SECOND;
 
 /// A file imported into the media library.
 #[derive(Clone, Debug)]
@@ -986,6 +1067,102 @@ impl Project {
         id
     }
 
+    /// The project's effect lane id (one per project, made on first use).
+    pub fn effect_track_id(&self) -> String {
+        format!("{}-effect-1", self.id)
+    }
+
+    /// A global effect: a clip on the effect lane from `at`, 3 s (but
+    /// at least 1 s, or what's left before the end). Returns its id.
+    pub fn add_effect_clip(&mut self, at: Micros, effect: EffectInstance) -> String {
+        let at = at.clamp(0, self.duration.max(0));
+        let remaining = self.duration - at;
+        let id = new_id("clip");
+        let mut clip = Clip {
+            id: id.clone(),
+            kind: "effect".into(),
+            timeline_start: at,
+            timeline_duration: EFFECT_CLIP_LENGTH.min(remaining.max(MIN_EFFECT_CLIP)),
+            speed: 1.0,
+            source: None,
+            source_start: None,
+            source_duration: None,
+            text: None,
+            hidden: false,
+            extra: Map::new(),
+        };
+        clip.extra.insert(
+            "transform".into(),
+            serde_json::json!({ "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1 }),
+        );
+        clip.set_effects(&[effect]);
+        let lane = self.effect_track_id();
+        match self.tracks.iter_mut().find(|t| t.id == lane) {
+            Some(t) => t.clips.push(clip),
+            None => self.tracks.push(Track {
+                id: lane,
+                kind: TrackType::Effect,
+                name: "Effects 1".into(),
+                clips: vec![clip],
+                order: 2.,
+                muted: false,
+                hidden: false,
+                locked: false,
+            }),
+        }
+        self.recompute_duration();
+        id
+    }
+
+    /// Single-select per kind: drops every effect of `prefix` from the
+    /// clip (older projects can hold several), then adds `effect` if any.
+    pub fn set_clip_effect(
+        &mut self,
+        clip_id: &str,
+        prefix: &str,
+        effect: Option<EffectInstance>,
+    ) -> bool {
+        let Some(clip) = self.clip_mut(clip_id) else {
+            return false;
+        };
+        let mut effects = clip.effects();
+        let before = effects.len();
+        effects.retain(|e| !e.kind.starts_with(prefix));
+        if effect.is_none() && effects.len() == before {
+            return false;
+        }
+        effects.extend(effect);
+        clip.set_effects(&effects);
+        true
+    }
+
+    /// Sets sliders of one of a clip's effects.
+    pub fn set_effect_params(
+        &mut self,
+        clip_id: &str,
+        effect_id: &str,
+        params: &[(String, f64)],
+    ) -> bool {
+        let Some(clip) = self.clip_mut(clip_id) else {
+            return false;
+        };
+        let mut effects = clip.effects();
+        let Some(e) = effects.iter_mut().find(|e| e.id == effect_id) else {
+            return false;
+        };
+        let mut changed = false;
+        for (k, v) in params {
+            if e.param(k) != Some(*v) {
+                e.parameters.insert(k.clone(), Value::from(*v));
+                changed = true;
+            }
+        }
+        if changed {
+            clip.set_effects(&effects);
+        }
+        changed
+    }
+
     /// Removes these clips wherever they are (a lane's "Delete track").
     pub fn delete_clips(&mut self, ids: &[String]) -> bool {
         let mut any = false;
@@ -1327,5 +1504,61 @@ mod tests {
                 (12_000_000, BeatStrength::Weak),
             ]
         );
+    }
+
+    #[test]
+    fn effect_clips_land_on_one_effect_lane() {
+        let mut p = Project::empty();
+        p.insert_media(&media(10), None);
+        let fx = EffectInstance::new("Overlays:Glitch".into(), &[("intensity".into(), 100.)]);
+        let a = p.add_effect_clip(2 * SECOND, fx.clone());
+        // Near the end it still gets a second.
+        let b = p.add_effect_clip(9_500_000, fx);
+        let lane = p.effect_track_id();
+        let t = p.tracks.iter().find(|t| t.id == lane).unwrap();
+        assert_eq!(t.kind, TrackType::Effect);
+        assert_eq!(t.clips.len(), 2);
+        let (_, a) = p.find_clip(&a).unwrap();
+        assert_eq!(
+            (a.timeline_start, a.timeline_duration),
+            (2 * SECOND, 3 * SECOND)
+        );
+        assert_eq!(a.label(), "Glitch");
+        let (_, b) = p.find_clip(&b).unwrap();
+        assert_eq!(b.timeline_duration, SECOND);
+        assert_eq!(p.duration, 10_500_000);
+        // The document carries the fields the app expects.
+        let json: Value = serde_json::from_str(&p.to_json()).unwrap();
+        let clip = &json["tracks"][2]["clips"][0];
+        assert_eq!(clip["effects"][0]["type"], "Overlays:Glitch");
+        assert_eq!(clip["effects"][0]["parameters"]["intensity"], 100.);
+        assert_eq!(clip["transform"]["scale"], 1);
+    }
+
+    #[test]
+    fn one_filter_per_clip() {
+        let mut p = Project::empty();
+        let id = p.insert_media(&media(4), None);
+        let honey = EffectInstance::new("Filters:Honey".into(), &[("intensity".into(), 80.)]);
+        let grain = EffectInstance::new("Overlays:Grain".into(), &[]);
+        assert!(p.set_clip_effect(&id, "Overlays:", Some(grain)));
+        assert!(p.set_clip_effect(&id, "Filters:", Some(honey.clone())));
+        assert!(p.set_clip_effect(&id, "Filters:", Some(honey.clone())));
+        let (_, c) = p.find_clip(&id).unwrap();
+        let kinds: Vec<String> = c.effects().into_iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, ["Overlays:Grain", "Filters:Honey"]);
+        let on = c.effect_with("Filters:").unwrap();
+        assert!(p.set_effect_params(&id, &on.id, &[("intensity".into(), 40.)]));
+        assert!(!p.set_effect_params(&id, &on.id, &[("intensity".into(), 40.)]));
+        let (_, c) = p.find_clip(&id).unwrap();
+        assert_eq!(
+            c.effect_with("Filters:").unwrap().param("intensity"),
+            Some(40.)
+        );
+        // None removes it; removing nothing changes nothing.
+        assert!(p.set_clip_effect(&id, "Filters:", None));
+        assert!(!p.set_clip_effect(&id, "Filters:", None));
+        let (_, c) = p.find_clip(&id).unwrap();
+        assert_eq!(c.effects().len(), 1);
     }
 }

@@ -1,11 +1,11 @@
-# Reel Studio desktop on GPUI: experiment
+# Reel Studio desktop on GPUI
 
-Can the desktop editor leave Electron for a native Rust app built on
-[GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor)? This
-branch is a working spike that tries to answer that. It is **not** the shipping
-desktop app. Releases on this repo are still the Electron build.
+The desktop editor, reimplemented as a native Rust app on
+[GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor), to
+replace the Electron build. Until it ships, releases on this repo are still
+the Electron build.
 
-![The spike: media library, player, inspector and timeline](screenshot.jpg)
+![Media library, player, inspector and timeline](screenshot.jpg)
 
 ## What it does
 
@@ -68,7 +68,7 @@ delete · Q / W delete left / right · ⌘Z / ⌘⇧Z undo / redo · ←/→ fra
 
 ## What we measured (M-series Mac, macOS 27, release build)
 
-| | GPUI spike | Electron app today |
+| | Rust app (GPUI) | Electron app today |
 | --- | --- | --- |
 | App size | 9.1 MB binary (+ FFmpeg dylibs, ~15–25 MB if bundled trimmed) | 284 MB `.app` |
 | Memory, 2 clips open, after playback | ~180–250 MB RSS | (not measured here) |

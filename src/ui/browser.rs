@@ -3,6 +3,8 @@
 //! left when a tab has several views; the view itself on the right.
 //! Media is the library: Import (or files dropped on the window) puts files
 //! here, not on the timeline; a click on a tile adds it at the playhead.
+//! Effects and Filter list their categories under the view in the side
+//! nav (the view's group row folds them), their tiles in `ui/fx.rs`.
 
 use gpui::{Context, FontWeight, ObjectFit, div, img, prelude::*, px, rgba};
 
@@ -43,7 +45,8 @@ pub const BROWSER_TABS: &[BrowserTab] = &[
     BrowserTab {
         label: "Effects",
         icon: Icon::Sparkle4,
-        views: &["Video effects", "Body effects"],
+        // Body effects need an on-device person matte (not on desktop).
+        views: &["Video effects"],
     },
     BrowserTab {
         label: "Transitions",
@@ -61,6 +64,18 @@ pub const BROWSER_TABS: &[BrowserTab] = &[
         views: &["Filter"],
     },
 ];
+
+pub const EFFECTS_TAB: usize = 4;
+pub const FILTER_TAB: usize = 7;
+
+/// The categories a browser view lists in the side nav, under its row.
+pub fn view_categories(tab: usize, view: usize) -> &'static [(&'static str, &'static str)] {
+    match (tab, view) {
+        (EFFECTS_TAB, 0) => crate::catalog::EFFECT_TABS,
+        (FILTER_TAB, 0) => crate::catalog::FILTER_TABS,
+        _ => &[],
+    }
+}
 
 const TAB_MIN_WIDTH: f32 = 54.;
 const SUBNAV_WIDTH: f32 = 104.;
@@ -109,6 +124,13 @@ impl Editor {
                     })
                     .when(!on, |d| d.hover(|s| s.text_color(theme::text_secondary())))
                     .on_click(cx.listener(move |ed, _, _, cx| {
+                        if ed.browser_tab != i {
+                            ed.fx_adjust_open = false;
+                        }
+                        if i == EFFECTS_TAB {
+                            // New and withdrawn effects show up.
+                            ed.effects.refresh_stale();
+                        }
                         ed.browser_tab = i;
                         cx.notify();
                     }))
@@ -129,44 +151,107 @@ impl Editor {
                     )
             }));
 
-        let subnav = (tab.views.len() > 1).then(|| {
+        let nested = |v: usize| !view_categories(tab_ix, v).is_empty();
+        let show_subnav = tab.views.len() > 1 || (0..tab.views.len()).any(nested);
+        let category_ix = self.browser_categories[tab_ix];
+        let subnav = show_subnav.then(|| {
             div()
+                .id("browser-subnav")
                 .flex_none()
                 .w(px(SUBNAV_WIDTH))
                 .p_2()
                 .flex()
                 .flex_col()
                 .gap(px(2.))
+                .overflow_y_scroll()
                 .border_r_1()
                 .border_color(theme::card_border())
                 .children(tab.views.iter().enumerate().map(|(i, label)| {
                     let on = i == view_ix;
+                    let categories = view_categories(tab_ix, i);
+                    let group = !categories.is_empty();
                     div()
-                        .id(("browser-view", i))
-                        .h(px(26.))
-                        .px_2()
                         .flex()
-                        .items_center()
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .text_size(px(theme::XS))
-                        .when(on, |d| d.bg(theme::button_bg()).text_color(theme::text()))
-                        .when(!on, |d| {
-                            d.text_color(theme::text_secondary())
-                                .hover(|s| s.bg(theme::fill_subtle()))
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .id(("browser-view", i))
+                                .h(px(26.))
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .rounded(px(5.))
+                                .cursor_pointer()
+                                .text_size(px(theme::XS))
+                                .when(on, |d| d.bg(theme::button_bg()).text_color(theme::text()))
+                                .when(on && group, |d| d.font_weight(FontWeight::SEMIBOLD))
+                                .when(!on, |d| {
+                                    d.text_color(theme::text_secondary())
+                                        .hover(|s| s.bg(theme::fill_subtle()))
+                                })
+                                .on_click(cx.listener(move |ed, _, _, cx| {
+                                    ed.browser_views[tab_ix] = i;
+                                    cx.notify();
+                                }))
+                                .child(div().flex_1().min_w_0().truncate().child(*label))
+                                .when(group, |d| {
+                                    d.child(
+                                        if on {
+                                            Icon::ChevronUp
+                                        } else {
+                                            Icon::ChevronDown
+                                        }
+                                        .el(
+                                            12.,
+                                            if on {
+                                                theme::text()
+                                            } else {
+                                                theme::text_tertiary()
+                                            },
+                                        ),
+                                    )
+                                }),
+                        )
+                        // The shown view's categories, folded under it.
+                        .when(on, |d| {
+                            d.children(categories.iter().enumerate().map(|(j, (_, name))| {
+                                let shown = j == category_ix;
+                                div()
+                                    .id(("browser-category", j))
+                                    .h(px(26.))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(5.))
+                                    .cursor_pointer()
+                                    .text_size(px(theme::XS))
+                                    .child(div().truncate().child(*name))
+                                    .when(shown, |d| {
+                                        d.bg(theme::fill_subtle())
+                                            .text_color(theme::text())
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                    })
+                                    .when(!shown, |d| {
+                                        d.text_color(theme::text_secondary())
+                                            .hover(|s| s.bg(theme::fill_subtle()))
+                                    })
+                                    .on_click(cx.listener(move |ed, _, _, cx| {
+                                        ed.browser_categories[tab_ix] = j;
+                                        ed.fx_scroll.set_offset(gpui::Point::default());
+                                        cx.notify();
+                                    }))
+                            }))
                         })
-                        .on_click(cx.listener(move |ed, _, _, cx| {
-                            ed.browser_views[tab_ix] = i;
-                            cx.notify();
-                        }))
-                        .child(*label)
                 }))
         });
 
-        let body = if tab_ix == 0 {
-            self.render_media_library(cx).into_any_element()
-        } else {
-            not_yet(tab.views[view_ix]).into_any_element()
+        let body = match (tab_ix, view_ix) {
+            (0, _) => self.render_media_library(cx).into_any_element(),
+            (EFFECTS_TAB, 0) => self.render_effects_view(cx),
+            (FILTER_TAB, 0) => self.render_filters_view(cx),
+            _ => not_yet(tab.views[view_ix]).into_any_element(),
         };
 
         div().size_full().flex().flex_col().child(tabs).child(

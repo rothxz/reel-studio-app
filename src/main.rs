@@ -1,5 +1,8 @@
+mod assets;
+mod catalog;
 mod decoder;
 mod editor;
+mod effects;
 mod engine;
 mod history;
 mod model;

@@ -3,6 +3,7 @@
 
 pub mod browser;
 pub mod dialogs;
+pub mod fx;
 pub mod header;
 pub mod home;
 pub mod icons;

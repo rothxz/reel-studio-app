@@ -1,14 +1,11 @@
-# Reel Studio desktop (GPUI): context
+# Reel Studio desktop: context
 
-This repo has two jobs:
-
-1. **Public home of the desktop app**: `README.md`, `docs/images/`, and the
-   GitHub Releases the Electron build publishes to (`main` branch).
-2. **The native rewrite**: a Rust app on GPUI (the UI framework behind the
-   Zed editor) that will replace the Electron shell. On the
-   `gpui-experiment` branch the Cargo crate sits at the repo root, next to
-   the public `README.md` / `docs/images/`; its own write-up is
-   `docs/GPUI.md`.
+This repo is the **desktop app**: a native Rust reimplementation of the
+Reel Studio desktop editor on GPUI (the UI framework behind the Zed
+editor), replacing the Electron build. The Cargo crate sits at the repo
+root next to the public `README.md` / `docs/images/` and the GitHub
+Releases (the Electron build publishes there until the Rust app ships).
+Its write-up is `docs/GPUI.md`.
 
 **Goal:** match the current desktop editor's UI and behaviour (the web
 editor that Electron wraps) in native Rust, panel by panel. Track progress
@@ -29,8 +26,8 @@ own `CLAUDE.md` is its codebase map.
 - **Never name the apps we study** (the phone/desktop editor and the
   document scanner we model features on) in code, comments, docs, commits
   or UI strings. Describe the feature in our own words.
-- `main` is the release/README branch. Don't commit app code there; work on
-  `gpui-experiment` (or branches off it). Push only when the user asks.
+- The app lives on `main`. Work on branches off `main`; commit or push
+  only when the user asks.
 - The old editor is the spec. Before building a panel, read its source
   (map below) and match its layout, labels, shortcuts and edge cases, not
   a guess of them.
@@ -48,6 +45,12 @@ tools/shot.sh out.png  # screenshot the app window without focusing it
 - `.cargo/config.toml` points `REEL_ENGINE_DIR` at
   `../reel-studio/modules/video-engine/cpp` (an exported variable wins).
   `build.rs` compiles every `cpp/src/*.cpp` + the shim with `cc`.
+- It also points `REEL_APP_DIR` at `../reel-studio`: `build.rs` reads the
+  app's public client config from its `.env` (asset host, catalog database
+  URL + publishable key → `REEL_ASSETS_URL` / `REEL_CATALOG_URL` /
+  `REEL_CATALOG_KEY`, also overridable at run time) and the filter catalog
+  + preview manifest into `OUT_DIR`. Compiled in, never committed; without
+  a checkout the app builds with no asset host, effects or filters.
 - Needs Homebrew `ffmpeg` (9.x, matched by `ffmpeg-next = 9`) and `pkg-config`.
 - A clean build takes minutes (GPUI is big); incremental is ~10 s.
 - Unlike the mobile app, building and running this app yourself is fine and
@@ -72,9 +75,20 @@ src/prefs.rs       panel sizes + timeline switches, data folder
 src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
 src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source,
                    filmstrip tile thread, waveform peaks
+src/assets.rs      the asset host (R2): URLs, disk cache, the tile picture
+                   workers (download + decode, first frame / animation)
+src/catalog.rs     served video effects (catalog database REST, paged per
+                   tab, disk copy) + the compiled-in filter list
+src/effects/       video effects + filters in the preview: shader packages
+                   (download, hash check, cache), the passes at a time
+                   (stack), Metal source (msl: the effect dialect →
+                   MSL, our fx_/fl_ helpers), the Metal renderer and its
+                   render thread
 src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono)
 src/ui/            one file per panel, each `impl Editor { fn render_… }`:
-                   header, home, browser, player, inspector, toolbar,
+                   header, home, browser, fx (effect / filter grids, the
+                   effect clip's settings, Adjust sliders, their edits),
+                   player, inspector, toolbar,
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
                    dialogs (popup, confirm, shortcuts), widgets,
@@ -122,6 +136,11 @@ thumbnails, waveform, audio out), and the editor state out of `editor.rs`.
 
 ## Design notes
 
+- **The browser picks, the inspector sets.** Looks and assets (effects,
+  filters, stickers, text templates, caption styles…) are picked in the
+  left browser only. The right inspector holds the selected clip's
+  settings (sliders, toggles, values), never a second catalog grid; a
+  "Replace" there sends you back to the browser tab.
 - Editor chrome is always dark, black/white, monochrome icons; no yellow
   accent in the editor (the app's accent is for the shell, not tools).
 - Old desktop palette: card `#1d1d1f`, card border `rgba(255,255,255,.06)`,
@@ -174,6 +193,11 @@ thumbnails, waveform, audio out), and the editor state out of `editor.rs`.
   them (macOS: the iOS AVFoundation/VideoToolbox/Metal files are nearly
   portable; only `AVFoundationDecoder.mm` and `VideoEngineBridge.mm` use
   UIKit).
+- Effects and filters are data: a package's `body` is GLSL-flavoured
+  (`vecN`, `S(uv)`, `MOD(`, `ATAN2(`); `effects/msl.rs` rewrites it to
+  Metal. Write the `fx_` / `fl_` helpers ourselves (never copy the app's
+  preludes); `every_hosted_package_compiles` (ignored, needs the asset
+  host) proves each hosted package still compiles.
 - Old web projects live in IndexedDB with `blob:` media; here projects are
   JSON files with absolute media paths. Opening a web-exported project
   will need a media relink step.

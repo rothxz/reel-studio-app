@@ -12,6 +12,12 @@ image = "0.25"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 ttf-parser = "0.25"
+ureq = "3"
+
+# The effect / filter passes of the preview (gpui already links both).
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.29"
+objc = "0.2"
 
 [build-dependencies]
 cc = "1.11.1"

@@ -7,6 +7,7 @@ use crate::model::{Micros, Project};
 
 #[derive(Clone, Debug)]
 pub struct ActiveLayer {
+    pub clip_id: String,
     pub source: String,
     /// Source time to show, already through speed / curve / reverse / freeze.
     pub source_time: Micros,
@@ -51,6 +52,16 @@ mod imp {
             out: *mut RawLayer,
             cap: usize,
         ) -> usize;
+        fn reel_filter_color_matrix(name: *const c_char, intensity: f64, out: *mut f64) -> i32;
+    }
+
+    /// A Classic filter's colour matrix at `intensity` (0–100), from the
+    /// engine's preset table; None when it's the identity.
+    pub fn filter_color_matrix(name: &str, intensity: f64) -> Option<[f32; 20]> {
+        let name = CString::new(name).ok()?;
+        let mut out = [0f64; 20];
+        let on = unsafe { reel_filter_color_matrix(name.as_ptr(), intensity, out.as_mut_ptr()) };
+        (on != 0).then(|| out.map(|v| v as f32))
     }
 
     // videoengine::PlaybackState
@@ -107,6 +118,9 @@ mod imp {
             raw[..n]
                 .iter()
                 .map(|l| ActiveLayer {
+                    clip_id: unsafe { CStr::from_ptr(l.clip_id) }
+                        .to_string_lossy()
+                        .into_owned(),
                     source: unsafe { CStr::from_ptr(l.source) }
                         .to_string_lossy()
                         .into_owned(),
@@ -135,6 +149,12 @@ mod imp {
         project: Option<Project>,
         time: Micros,
         anchor: Option<(Instant, Micros)>,
+    }
+
+    /// The Classic filters' matrices live in the C++ engine; the stand-in
+    /// has none (those looks show unfiltered).
+    pub fn filter_color_matrix(_name: &str, _intensity: f64) -> Option<[f32; 20]> {
+        None
     }
 
     impl Engine {
@@ -193,6 +213,7 @@ mod imp {
                         .iter()
                         .filter(move |c| !c.hidden && t >= c.timeline_start && t < c.end())
                         .map(move |c| ActiveLayer {
+                            clip_id: c.id.clone(),
                             source: c.source.clone().unwrap_or_default(),
                             // Constant speed only; a still has no source time.
                             source_time: c.source_start.unwrap_or(0)
@@ -210,12 +231,21 @@ mod imp {
     }
 }
 
-pub use imp::Engine;
+pub use imp::{Engine, filter_color_matrix};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{MediaItem, SECOND};
+
+    /// Classic filters come from the engine's preset table.
+    #[cfg(feature = "cpp-engine")]
+    #[test]
+    fn classic_filter_matrices() {
+        assert!(filter_color_matrix("VHS", 100.).is_some());
+        assert!(filter_color_matrix("VHS", 0.).is_none());
+        assert!(filter_color_matrix("No Such Look", 100.).is_none());
+    }
 
     /// Runs against whichever backend is built: `cargo test --features
     /// cpp-engine` checks that the C++ core accepts the JSON this app writes.

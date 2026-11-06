@@ -36,6 +36,7 @@ icons! {
     CheckmarkCircle => (ION, 0xf21e),
     Checkmark => (ION, 0xf21d),
     ChevronDown => (ION, 0xf232),
+    ChevronUp => (ION, 0xf241),
     ChevronForward => (ION, 0xf23b),
     ChevronBack => (ION, 0xf229),
     Sparkles => (ION, 0xf58d),
@@ -132,6 +133,7 @@ icons! {
     Transition => (MDI, 0xf0915),
     FormatText => (MDI, 0xf0284),
     Filmstrip => (MDI, 0xf0230),
+    Ban => (MDI, 0xf073a),
 }
 
 impl Icon {

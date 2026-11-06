@@ -113,9 +113,11 @@ const AUDIO_TABS: &[Tab] = &[Tab {
         e("audioDuration", "Duration"),
     ],
 }];
+// Effects are picked in the browser (left); the inspector only holds the
+// picked one's settings, never a second grid.
 const EFFECT_TABS: &[Tab] = &[Tab {
     label: "Effects",
-    entries: &[e("effects", "Effects"), e("effects:adjust", "Adjust")],
+    entries: &[e("effects", "Adjust")],
 }];
 const STICKER_TABS: &[Tab] = &[VISUAL_BASIC];
 const DRAWING_TABS: &[Tab] = &[Tab {
@@ -340,6 +342,7 @@ impl Editor {
 
         let body = match current {
             Some("speed") => self.render_speed_panel(clip, cx).into_any_element(),
+            Some("effects") => self.render_effect_settings(cx),
             Some(key) => {
                 let label = tabs
                     .iter()

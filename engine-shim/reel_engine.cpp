@@ -9,6 +9,7 @@
 #include <string>
 
 #include "videoengine/Engine.h"
+#include "videoengine/FilterPresets.h"
 #include "videoengine/Timeline.h"
 
 using namespace videoengine;
@@ -86,6 +87,15 @@ size_t reel_engine_active_layers(ReelEngine* e, int64_t micros, ReelActiveLayer*
     l.track_order = a.track->order;
   }
   return n;
+}
+
+// A Classic filter's 4x5 colour matrix (rows R, G, B, A; column 5 the
+// offset; straight 0..1 colour) at an intensity (0..100). 0 when it is the
+// identity (an unknown name, or intensity 0), else 1.
+int32_t reel_filter_color_matrix(const char* name, double intensity, double* out) {
+  auto m = GetFilterColorMatrix(name ? name : "", intensity);
+  for (size_t i = 0; i < m.size(); ++i) out[i] = m[i];
+  return m == kIdentityColorMatrix4x5 ? 0 : 1;
 }
 
 }  // extern "C"

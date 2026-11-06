@@ -16,8 +16,13 @@ use gpui::{
     Size, Window, actions, canvas, div, prelude::*, px,
 };
 
+use crate::assets::{self, Picture, PictureJob, PictureServer};
+use crate::catalog::EffectCatalog;
 use crate::decoder::{self, DecodedFrame, FrameServer, TileServer, Waveform};
-use crate::engine::Engine;
+use crate::effects::package::{self as fx_package, Fetched, Packages};
+use crate::effects::stack::{self as fx_stack, LiveParam, Needs, Sources, Stack};
+use crate::effects::{self, Rendered};
+use crate::engine::{self, Engine};
 use crate::history::History;
 use crate::model::{self, Clip, MediaItem, Micros, Project, SECOND, Side, TrackType};
 use crate::prefs::Prefs;
@@ -244,6 +249,25 @@ pub struct Editor {
     pub(crate) browser_views: [usize; 8],
     /// Media tile pictures, by file path.
     pub(crate) thumbs: HashMap<String, Arc<RenderImage>>,
+    /// The category shown in each browser tab with categories (Effects,
+    /// Filter).
+    pub(crate) browser_categories: [usize; 8],
+    /// The Adjust sliders over the browser's filter grid.
+    pub(crate) fx_adjust_open: bool,
+    /// The served video effects (tabs fetched as they're shown).
+    pub(crate) effects: EffectCatalog,
+    /// Effect / filter rows asked for by name (a project's), once each.
+    effects_named: HashSet<String>,
+    /// Effect / filter tile pictures: first frames by key (None: failed),
+    /// the few animations played on hover, and what's been asked for.
+    pub(crate) stills: HashMap<String, Option<Arc<RenderImage>>>,
+    pub(crate) anims: Vec<(String, Arc<RenderImage>)>,
+    pub(crate) pictures_pending: RefCell<HashSet<PictureJob>>,
+    pub(crate) picture_server: PictureServer,
+    /// The effect / filter tile under the pointer (its animation plays).
+    pub(crate) fx_hover: Option<String>,
+    /// The effect grid's scroll (more rows load near the end).
+    pub(crate) fx_scroll: gpui::ScrollHandle,
     /// The inspector's open sub-tab (entry key) for the selected clip.
     pub(crate) inspector_entry: Option<&'static str>,
     /// Where measured elements sit in the window, by name.
@@ -269,6 +293,22 @@ pub struct Editor {
     servers: HashMap<String, FrameServer>,
     frame_tx: async_channel::Sender<DecodedFrame>,
     wanted: Option<(String, Micros)>,
+    /// The clip the player shows (its filter and effect apply).
+    wanted_clip: Option<String>,
+    /// The last decoded frame as it came (effects run over it again when
+    /// the time or the document changes), and a count of frames decoded.
+    raw_frame: Option<(Arc<DecodedFrame>, Option<String>)>,
+    frame_seq: u64,
+    /// Effect / filter shaders downloaded this session.
+    pub(crate) packages: Packages,
+    /// A held effect slider: the preview follows it before the edit lands.
+    pub(crate) live_fx: Option<LiveParam>,
+    fx_worker: effects::Worker,
+    /// The last (frame, stack) sent to be drawn, the newest job number,
+    /// and the job on screen (older results are dropped).
+    fx_last: Option<(u64, Stack)>,
+    fx_seq: u64,
+    fx_shown: u64,
     pub(crate) frame: Option<Arc<RenderImage>>,
     stale_frames: Vec<Arc<RenderImage>>,
     pub(crate) frame_info: Option<(u32, u32, Micros)>,
@@ -290,10 +330,30 @@ impl Editor {
         })
         .detach();
 
+        let (fx_tx, fx_rx) = async_channel::bounded::<Rendered>(2);
+        cx.spawn(async move |this, cx| {
+            while let Ok(r) = fx_rx.recv().await {
+                if this.update(cx, |ed, cx| ed.on_rendered(r, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         let (tile_tx, tile_rx) = async_channel::unbounded::<DecodedFrame>();
         cx.spawn(async move |this, cx| {
             while let Ok(tile) = tile_rx.recv().await {
                 if this.update(cx, |ed, cx| ed.on_tile(tile, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let (picture_tx, picture_rx) = async_channel::unbounded::<Picture>();
+        cx.spawn(async move |this, cx| {
+            while let Ok(p) = picture_rx.recv().await {
+                if this.update(cx, |ed, cx| ed.on_picture(p, cx)).is_err() {
                     break;
                 }
             }
@@ -336,6 +396,16 @@ impl Editor {
             browser_tab: 0,
             browser_views: [0; 8],
             thumbs: HashMap::new(),
+            browser_categories: [0; 8],
+            fx_adjust_open: false,
+            effects: EffectCatalog::load(),
+            effects_named: HashSet::new(),
+            stills: HashMap::new(),
+            anims: vec![],
+            pictures_pending: RefCell::default(),
+            picture_server: PictureServer::new(assets::EFFECT_PREVIEWS, picture_tx),
+            fx_hover: None,
+            fx_scroll: gpui::ScrollHandle::new(),
             inspector_entry: None,
             bounds: Rc::default(),
             lane_scroll_y: 0.,
@@ -350,6 +420,15 @@ impl Editor {
             servers: HashMap::new(),
             frame_tx,
             wanted: None,
+            wanted_clip: None,
+            raw_frame: None,
+            frame_seq: 0,
+            packages: Packages::default(),
+            live_fx: None,
+            fx_worker: effects::Worker::spawn(fx_tx),
+            fx_last: None,
+            fx_seq: 0,
+            fx_shown: 0,
             frame: None,
             stale_frames: vec![],
             frame_info: None,
@@ -360,6 +439,135 @@ impl Editor {
     }
 
     // ---- small helpers ----------------------------------------------------
+
+    /// Asks for a tile picture (first frame, or the whole animation)
+    /// unless it's here or on its way.
+    pub fn want_picture(&self, key: &str, animated: bool) {
+        let job = PictureJob {
+            key: key.to_string(),
+            animated,
+        };
+        let have = if animated {
+            self.anims.iter().any(|(k, _)| k == key)
+        } else {
+            self.stills.contains_key(key)
+        };
+        if have || !self.pictures_pending.borrow_mut().insert(job.clone()) {
+            return;
+        }
+        self.picture_server.request(job);
+    }
+
+    fn on_picture(&mut self, p: Picture, cx: &mut Context<Self>) {
+        self.pictures_pending.borrow_mut().remove(&p.job);
+        if p.job.animated {
+            // A handful of animations at a time (a few MB each).
+            const KEEP: usize = 6;
+            if let Some(image) = p.image {
+                self.anims.retain(|(k, _)| *k != p.job.key);
+                self.anims.push((p.job.key, image));
+                while self.anims.len() > KEEP {
+                    let (_, old) = self.anims.remove(0);
+                    self.stale_frames.push(old);
+                }
+            }
+        } else {
+            self.stills.insert(p.job.key, p.image);
+        }
+        cx.notify();
+    }
+
+    /// The hovered tile's animation, if it's decoded.
+    pub fn anim(&self, key: &str) -> Option<Arc<RenderImage>> {
+        self.anims
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, i)| i.clone())
+    }
+
+    /// Fetches the next page of an Effects tab off the UI thread.
+    pub fn load_effect_page(&mut self, tab: &'static str, cx: &mut Context<Self>) {
+        let Some(offset) = self.effects.begin_page(tab) else {
+            return;
+        };
+        let task = cx
+            .background_executor()
+            .spawn(async move { crate::catalog::fetch_page(tab, offset) });
+        cx.spawn(async move |this, cx| {
+            let rows = task.await;
+            this.update(cx, |ed, cx| {
+                ed.effects.end_page(tab, offset, rows);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Effects in the project this catalog hasn't seen (their sliders).
+    fn load_named_effects(&mut self, names: Vec<String>, cx: &mut Context<Self>) {
+        let names: Vec<String> = names
+            .into_iter()
+            .filter(|n| self.effects.get(n).is_none() && self.effects_named.insert(n.clone()))
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let task = cx
+            .background_executor()
+            .spawn(async move { crate::catalog::fetch_named(&names) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(rows) = task.await {
+                this.update(cx, |ed, cx| {
+                    ed.effects.remember(&rows);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Before drawing: the effect lists on screen get their first page, or
+    /// the next one when scrolled near their end; a selected effect clip's
+    /// entry is fetched for its sliders.
+    fn prefetch_effects(&mut self, cx: &mut Context<Self>) {
+        use crate::catalog::EFFECT_TABS;
+        use crate::ui::browser::EFFECTS_TAB;
+        let mut shown: Vec<(&'static str, gpui::ScrollHandle)> = vec![];
+        if self.screen == Screen::Editor
+            && self.browser_tab == EFFECTS_TAB
+            && self.browser_views[EFFECTS_TAB] == 0
+        {
+            let i = self.browser_categories[EFFECTS_TAB].min(EFFECT_TABS.len() - 1);
+            shown.push((EFFECT_TABS[i].0, self.fx_scroll.clone()));
+        }
+        let selected_effect = self
+            .selected_clip()
+            .filter(|(_, c)| c.kind == "effect")
+            .map(|(_, c)| {
+                c.effects()
+                    .into_iter()
+                    .map(|e| e.name().to_string())
+                    .collect::<Vec<_>>()
+            });
+        if let Some(names) = selected_effect {
+            self.load_named_effects(names, cx);
+        }
+        for (tab, scroll) in shown {
+            let near_end = {
+                let max = f32::from(scroll.max_offset().height);
+                let at = -f32::from(scroll.offset().y);
+                max - at < 400.
+            };
+            match self.effects.page(tab) {
+                None => self.load_effect_page(tab, cx),
+                Some(p) if !p.done && !p.loading && near_end => self.load_effect_page(tab, cx),
+                _ => {}
+            }
+        }
+    }
 
     pub fn fps(&self) -> f64 {
         if self.project.canvas.fps > 0. {
@@ -554,6 +762,7 @@ impl Editor {
         self.pause();
         self.servers.clear();
         self.wanted = None;
+        self.raw_frame = None;
         if let Some(old) = self.frame.take() {
             self.stale_frames.push(old);
         }
@@ -701,6 +910,7 @@ impl Editor {
         self.pause();
         self.servers.clear();
         self.wanted = None;
+        self.raw_frame = None;
         if let Some(old) = self.frame.take() {
             self.stale_frames.push(old);
         }
@@ -1296,12 +1506,15 @@ impl Editor {
             .rfind(|l| l.is_visual && !l.source.is_empty());
         let Some(layer) = top else {
             self.wanted = None;
+            self.wanted_clip = None;
+            self.raw_frame = None;
             if let Some(old) = self.frame.take() {
                 self.stale_frames.push(old);
             }
             self.frame_info = None;
             return;
         };
+        self.wanted_clip = Some(layer.clip_id.clone());
         if self.wanted.as_ref() == Some(&(layer.source.clone(), layer.source_time)) {
             return;
         }
@@ -1344,14 +1557,10 @@ impl Editor {
         if self.wanted.as_ref().is_none_or(|(src, _)| *src != f.source) {
             return; // a cut moved on to another file meanwhile
         }
-        let Some(buffer) = image::RgbaImage::from_raw(f.width, f.height, f.bgra) else {
-            return;
-        };
-        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
-        if let Some(old) = self.frame.replace(image) {
-            self.stale_frames.push(old);
-        }
         self.frame_info = Some((f.width, f.height, f.pts));
+        self.frame_seq += 1;
+        // Drawn on the next render, through the effects if any are on.
+        self.raw_frame = Some((Arc::new(f), self.wanted_clip.clone()));
         let (since, n) = &mut self.fps_window;
         *n += 1;
         let elapsed = since.elapsed().as_secs_f32();
@@ -1360,6 +1569,124 @@ impl Editor {
             self.fps_window = (Instant::now(), 0);
         }
         cx.notify();
+    }
+
+    // ---- effects + filters in the preview ---------------------------------
+
+    /// The size the canvas is drawn at under global effects: the project's
+    /// shape, at most the preview's decode width on its long side.
+    fn fx_canvas_px(&self) -> (u32, u32) {
+        let (w, h) = (
+            self.project.canvas.width.max(2) as f64,
+            self.project.canvas.height.max(2) as f64,
+        );
+        let scale = (PREVIEW_MAX_WIDTH as f64 / w.max(h)).min(1.);
+        let even = |n: f64| ((n * scale / 2.).round() as u32 * 2).max(2);
+        (even(w), even(h))
+    }
+
+    /// Sends the frame on screen through the looks that apply at the
+    /// preview time (when that changed), or shows it as it is when none
+    /// do. Fetches what's missing (catalog rows, packages); it's drawn
+    /// again when they land.
+    fn refresh_picture(&mut self, cx: &mut Context<Self>) {
+        let Some((frame, clip_id)) = self.raw_frame.clone() else {
+            return;
+        };
+        let mut needs = Needs::default();
+        let stack = {
+            let shown = clip_id
+                .as_deref()
+                .and_then(|id| self.project.find_clip(id))
+                .map(|(_, c)| c);
+            let effects = &self.effects;
+            let effect_key = |name: &str| {
+                effects
+                    .get(name)
+                    .map(|e| e.package_key.clone())
+                    .filter(|k| !k.is_empty())
+            };
+            let src = Sources {
+                packages: &self.packages,
+                effect_key: &effect_key,
+                filter_matrix: &engine::filter_color_matrix,
+                live: self.live_fx.as_ref(),
+            };
+            fx_stack::build(
+                &self.project,
+                shown,
+                self.preview_time(),
+                self.fx_canvas_px(),
+                &src,
+                &mut needs,
+            )
+        };
+        self.load_named_effects(needs.rows, cx);
+        for key in needs.effect_packages {
+            self.fetch_package(key, false, cx);
+        }
+        for key in needs.filter_packages {
+            self.fetch_package(key, true, cx);
+        }
+
+        if self
+            .fx_last
+            .as_ref()
+            .is_some_and(|(seq, last)| *seq == self.frame_seq && *last == stack)
+        {
+            return;
+        }
+        self.fx_seq += 1;
+        if stack.is_empty() {
+            self.fx_shown = self.fx_seq;
+            self.show_picture(frame.width, frame.height, frame.bgra.clone());
+        } else {
+            self.fx_worker.submit(effects::Job {
+                seq: self.fx_seq,
+                frame,
+                stack: stack.clone(),
+            });
+        }
+        self.fx_last = Some((self.frame_seq, stack));
+    }
+
+    fn show_picture(&mut self, width: u32, height: u32, bgra: Vec<u8>) {
+        let Some(buffer) = image::RgbaImage::from_raw(width, height, bgra) else {
+            return;
+        };
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+        if let Some(old) = self.frame.replace(image) {
+            self.stale_frames.push(old);
+        }
+    }
+
+    fn on_rendered(&mut self, r: Rendered, cx: &mut Context<Self>) {
+        // Superseded meanwhile (or the frame went away).
+        if r.seq <= self.fx_shown || self.raw_frame.is_none() {
+            return;
+        }
+        self.fx_shown = r.seq;
+        self.show_picture(r.width, r.height, r.bgra);
+        cx.notify();
+    }
+
+    /// Downloads a package unless it's here or on its way.
+    fn fetch_package(&mut self, key: String, filter: bool, cx: &mut Context<Self>) {
+        if !self.packages.begin(&key) {
+            return;
+        }
+        let task = cx
+            .background_executor()
+            .spawn(async move { fx_package::fetch(key, filter) });
+        cx.spawn(async move |this, cx| {
+            let fetched: Fetched = task.await;
+            this.update(cx, |ed, cx| {
+                ed.packages.end(fetched);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ---- timeline view ----------------------------------------------------
@@ -1624,6 +1951,7 @@ impl Editor {
                     apply(self, f, true, cx);
                 }
                 self.live_value = None;
+                self.live_fx = None;
             }
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
@@ -1643,7 +1971,9 @@ impl Render for Editor {
             self.request_preview();
             window.request_animation_frame();
         }
+        self.refresh_picture(cx);
         self.tick_edge_scroll(window, cx);
+        self.prefetch_effects(cx);
         // A drag over the timeline that ended elsewhere leaves no ghost.
         if self.media_drop.is_some() && !cx.has_active_drag() {
             self.media_drop = None;
