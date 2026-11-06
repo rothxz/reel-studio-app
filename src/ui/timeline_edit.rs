@@ -27,7 +27,8 @@ use crate::selection::Selection;
 use crate::shortcuts::Shortcut;
 use crate::theme;
 use crate::ui::timeline::{
-    BOTTOM_PAD, LANE_HEIGHT, MAIN_BOTTOM, MAIN_TOP, MIN_CLIP, SNAP_PX, STACK_TOP, lane_layouts,
+    BOTTOM_PAD, LANE_HEIGHT, LaneFlag, LaneTargets, MAIN_BOTTOM, MAIN_TOP, MIN_CLIP, SNAP_PX,
+    STACK_TOP, lane_layouts,
 };
 
 /// Pointer travel (px) before a press on a clip becomes a move.
@@ -502,7 +503,7 @@ impl Editor {
         if bottom > top {
             for lane in &stack {
                 for t in p.tracks.iter().filter(|t| lane.track_ids.contains(&t.id)) {
-                    for c in &t.clips {
+                    for c in t.clips.iter().filter(|c| lane.holds(c)) {
                         let y = STACK_TOP + lane.clip_top(&c.id) - self.lane_scroll_y;
                         if usable(t, c)
                             && y.max(STACK_TOP) < bottom
@@ -798,25 +799,20 @@ impl Editor {
         self.open_popup(at, items, cx);
     }
 
-    /// A lane's "…": delete every clip on it (one undo step).
+    /// A lane's "…": select or delete every clip on it (one undo step).
     pub fn open_lane_options(
         &mut self,
-        track_ids: Vec<String>,
+        targets: LaneTargets,
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let tracks: Vec<_> = self
-            .project
-            .tracks
-            .iter()
-            .filter(|t| track_ids.contains(&t.id))
-            .collect();
-        let locked = !tracks.is_empty() && tracks.iter().all(|t| t.locked);
-        let ids: Vec<String> = tracks
-            .iter()
-            .flat_map(|t| t.clips.iter().map(|c| c.id.clone()))
-            .collect();
-        let main = tracks.iter().any(|t| self.project.is_main_track(&t.id));
+        let locked = targets.flag_on(&self.project, LaneFlag::Locked);
+        let ids = targets.clip_ids(&self.project);
+        let main = ids.iter().any(|id| {
+            self.project
+                .track_of(id)
+                .is_some_and(|t| self.project.is_main_track(&t.id))
+        });
         let empty = ids.is_empty();
         let select_ids = ids.clone();
         let items = vec![

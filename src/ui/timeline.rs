@@ -69,6 +69,7 @@ const WAVE_STEP: f32 = 2.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneKind {
     Main,
+    Captions,
     Overlay,
     Effect,
     Audio,
@@ -79,6 +80,7 @@ impl LaneKind {
     fn icon(self) -> Icon {
         match self {
             LaneKind::Main => Icon::Filmstrip,
+            LaneKind::Captions => Icon::ClosedCaption,
             LaneKind::Overlay => Icon::Layers,
             LaneKind::Effect => Icon::Sparkle4,
             LaneKind::Audio => Icon::MusicalNote,
@@ -88,6 +90,7 @@ impl LaneKind {
     fn name(self) -> &'static str {
         match self {
             LaneKind::Main => "Main track",
+            LaneKind::Captions => "Captions",
             LaneKind::Overlay => "Overlay",
             LaneKind::Effect => "Effects",
             LaneKind::Audio => "Audio",
@@ -100,10 +103,68 @@ impl LaneKind {
     }
 }
 
+/// Which of its tracks' clips a lane shows: captions sit on the text track
+/// but get a lane of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneFilter {
+    All,
+    Captions,
+    NoCaptions,
+}
+
+impl LaneFilter {
+    pub fn holds(self, clip: &Clip) -> bool {
+        match self {
+            LaneFilter::All => true,
+            LaneFilter::Captions => clip.is_caption(),
+            LaneFilter::NoCaptions => !clip.is_caption(),
+        }
+    }
+}
+
+/// What a lane's switches and "…" menu act on: whole tracks, and single
+/// clips where lanes share a track (Captions and Text).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaneTargets {
+    pub track_ids: Vec<String>,
+    pub clip_ids: Vec<String>,
+}
+
+impl LaneTargets {
+    /// Every clip the lane covers.
+    pub fn clip_ids(&self, project: &Project) -> Vec<String> {
+        project
+            .tracks
+            .iter()
+            .flat_map(|t| {
+                t.clips.iter().filter(move |c| {
+                    self.track_ids.contains(&t.id) || self.clip_ids.contains(&c.id)
+                })
+            })
+            .map(|c| c.id.clone())
+            .collect()
+    }
+
+    /// The switch is on for every track and clip the lane covers.
+    pub fn flag_on(&self, project: &Project, flag: LaneFlag) -> bool {
+        if self.track_ids.is_empty() && self.clip_ids.is_empty() {
+            return false;
+        }
+        project.tracks.iter().all(|t| {
+            (!self.track_ids.contains(&t.id) || flag.of_track(t))
+                && t.clips
+                    .iter()
+                    .all(|c| !self.clip_ids.contains(&c.id) || flag.of_clip(c))
+        })
+    }
+}
+
 /// One drawn lane: the tracks it shows and where its clips sit.
 pub struct LaneLayout {
     pub kind: LaneKind,
     pub track_ids: Vec<String>,
+    pub filter: LaneFilter,
+    pub targets: LaneTargets,
     /// Top: in the lane area (main), or in the stack's content (others).
     pub top: f32,
     pub height: f32,
@@ -113,6 +174,11 @@ pub struct LaneLayout {
 }
 
 impl LaneLayout {
+    /// The lane draws this clip (of one of its tracks).
+    pub fn holds(&self, clip: &Clip) -> bool {
+        self.filter.holds(clip)
+    }
+
     pub fn clip_top(&self, clip_id: &str) -> f32 {
         let row = self.rows.get(clip_id).copied().unwrap_or(0);
         self.top + row as f32 * (self.row_height + LANE_GAP)
@@ -152,6 +218,11 @@ pub fn lane_layouts(project: &Project) -> (LaneLayout, Vec<LaneLayout>, f32) {
     let main = LaneLayout {
         kind: LaneKind::Main,
         track_ids: main_id.iter().cloned().collect(),
+        filter: LaneFilter::All,
+        targets: LaneTargets {
+            track_ids: main_id.iter().cloned().collect(),
+            clip_ids: vec![],
+        },
         top: MAIN_TOP,
         height: MAIN_LANE_HEIGHT,
         row_height: MAIN_LANE_HEIGHT,
@@ -169,24 +240,64 @@ pub fn lane_layouts(project: &Project) -> (LaneLayout, Vec<LaneLayout>, f32) {
     let mut stack = vec![];
     let mut top = 0.;
     for kind in [
+        LaneKind::Captions,
         LaneKind::Overlay,
         LaneKind::Effect,
         LaneKind::Audio,
         LaneKind::Text,
     ] {
+        let (filter, of_kind) = match kind {
+            LaneKind::Captions => (LaneFilter::Captions, LaneKind::Text),
+            LaneKind::Text => (LaneFilter::NoCaptions, LaneKind::Text),
+            k => (LaneFilter::All, k),
+        };
         let tracks: Vec<&Track> = project
             .tracks
             .iter()
-            .filter(|t| Some(&t.id) != main_id.as_ref() && kind_of(t) == kind)
+            .filter(|t| Some(&t.id) != main_id.as_ref() && kind_of(t) == of_kind)
+            .filter(|t| kind != LaneKind::Captions || t.kind == TrackType::Text)
             .collect();
-        if tracks.iter().all(|t| t.clips.is_empty()) {
+        let clips: Vec<&Clip> = tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| filter.holds(c))
+            .collect();
+        if clips.is_empty() {
             continue;
         }
-        let (rows, count) = assign_rows(tracks.iter().flat_map(|t| t.clips.iter()));
+        // Captions never fan out: one row, in time order.
+        let (rows, count) = if kind == LaneKind::Captions {
+            (clips.iter().map(|c| (c.id.clone(), 0)).collect(), 1)
+        } else {
+            assign_rows(clips.iter().copied())
+        };
+        // The text track is shared: Captions and Text switch their own clips.
+        let targets = match kind {
+            LaneKind::Captions | LaneKind::Text => LaneTargets {
+                track_ids: tracks
+                    .iter()
+                    .filter(|t| t.kind != TrackType::Text)
+                    .map(|t| t.id.clone())
+                    .collect(),
+                clip_ids: tracks
+                    .iter()
+                    .filter(|t| t.kind == TrackType::Text)
+                    .flat_map(|t| t.clips.iter())
+                    .filter(|c| filter.holds(c))
+                    .map(|c| c.id.clone())
+                    .collect(),
+            },
+            _ => LaneTargets {
+                track_ids: tracks.iter().map(|t| t.id.clone()).collect(),
+                clip_ids: vec![],
+            },
+        };
         let height = LANE_HEIGHT * count as f32 + LANE_GAP * (count - 1) as f32;
         stack.push(LaneLayout {
             kind,
             track_ids: tracks.iter().map(|t| t.id.clone()).collect(),
+            filter,
+            targets,
             top,
             height,
             row_height: LANE_HEIGHT,
@@ -310,11 +421,35 @@ fn minor_divisions(major: f64) -> u32 {
 }
 
 /// A lane switch in the track header.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneFlag {
     Locked,
     Hidden,
     Muted,
+}
+
+impl LaneFlag {
+    fn of_track(self, t: &Track) -> bool {
+        match self {
+            LaneFlag::Locked => t.locked,
+            LaneFlag::Hidden => t.hidden,
+            LaneFlag::Muted => t.muted,
+        }
+    }
+    fn of_clip(self, c: &Clip) -> bool {
+        match self {
+            LaneFlag::Locked => c.locked(),
+            LaneFlag::Hidden => c.hidden,
+            LaneFlag::Muted => c.muted(),
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            LaneFlag::Locked => "locked",
+            LaneFlag::Hidden => "hidden",
+            LaneFlag::Muted => "muted",
+        }
+    }
 }
 
 /// Where a clip is drawn this frame.
@@ -608,7 +743,7 @@ impl Editor {
                 let Some(track) = self.project.tracks.iter().find(|t| &t.id == tid).cloned() else {
                     continue;
                 };
-                for clip in &track.clips {
+                for clip in track.clips.iter().filter(|c| lane.holds(c)) {
                     let y = lane.clip_top(&clip.id) - scroll_y;
                     let (el, slot, float) = place(
                         self,
@@ -726,24 +861,17 @@ impl Editor {
         // ---- header column
         let main_header = main_track
             .as_ref()
-            .map(|t| self.lane_header(&main_lane, std::slice::from_ref(t), cx));
+            .map(|_| self.lane_header(&main_lane, cx));
         let stack_headers: Vec<AnyElement> = stack
             .iter()
             .map(|lane| {
-                let tracks: Vec<Track> = self
-                    .project
-                    .tracks
-                    .iter()
-                    .filter(|t| lane.track_ids.contains(&t.id))
-                    .cloned()
-                    .collect();
                 div()
                     .absolute()
                     .left_0()
                     .right_0()
                     .top(px(lane.top - scroll_y))
                     .h(px(lane.height))
-                    .child(self.lane_header(lane, &tracks, cx))
+                    .child(self.lane_header(lane, cx))
                     .into_any_element()
             })
             .collect();
@@ -977,7 +1105,11 @@ impl Editor {
             .inset_0()
             .rounded(px(4.))
             .overflow_hidden()
-            .bg(clip_color(&clip.kind))
+            .bg(if clip.is_caption() {
+                theme::clip_caption()
+            } else {
+                clip_color(&clip.kind)
+            })
             .border_1()
             .border_color(rgba(0xffffff17));
 
@@ -1306,28 +1438,27 @@ impl Editor {
     }
 
     /// A lane's track header: its icon, then lock / eye / speaker / "…".
-    fn lane_header(
-        &self,
-        lane: &LaneLayout,
-        tracks: &[Track],
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let all = |f: fn(&Track) -> bool| !tracks.is_empty() && tracks.iter().all(f);
-        let locked = all(|t| t.locked);
-        let hidden = all(|t| t.hidden);
-        let muted = all(|t| t.muted);
-        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
-        let key = ids.first().cloned().unwrap_or_default();
+    fn lane_header(&self, lane: &LaneLayout, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let targets = lane.targets.clone();
+        let locked = targets.flag_on(&self.project, LaneFlag::Locked);
+        let hidden = targets.flag_on(&self.project, LaneFlag::Hidden);
+        let muted = targets.flag_on(&self.project, LaneFlag::Muted);
+        let key = format!(
+            "{}-{:?}",
+            lane.track_ids.first().cloned().unwrap_or_default(),
+            lane.kind
+        );
         let toggle = |flag: LaneFlag, on: bool, icon: Icon, label: &'static str| {
-            let ids = ids.clone();
+            let targets = targets.clone();
             icon_button(SharedString::from(format!("{label}-{key}")), icon, label)
                 .size(15.)
                 .lit(on)
                 .on_click(
-                    cx.listener(move |ed, _, _, cx| ed.toggle_lanes_flag(ids.clone(), flag, cx)),
+                    cx.listener(move |ed, _, _, cx| ed.toggle_lane_flag(targets.clone(), flag, cx)),
                 )
         };
-        let more_ids = ids.clone();
+        let more_targets = targets.clone();
+        let captions = lane.kind == LaneKind::Captions;
         div()
             .size_full()
             .pl_2()
@@ -1343,7 +1474,12 @@ impl Editor {
                     .items_center()
                     .child(lane.kind.icon().el(16., theme::text_tertiary()))
                     .id(SharedString::from(format!("lane-icon-{key}")))
-                    .tooltip(crate::ui::widgets::tooltip(lane.kind.name(), None)),
+                    .tooltip(crate::ui::widgets::tooltip(lane.kind.name(), None))
+                    // The Captions icon picks the caption under the playhead.
+                    .when(captions, |d| {
+                        d.cursor_pointer()
+                            .on_click(cx.listener(|ed, _, _, cx| ed.select_caption_at_playhead(cx)))
+                    }),
             )
             .child(toggle(
                 LaneFlag::Locked,
@@ -1380,7 +1516,7 @@ impl Editor {
                         MouseButton::Left,
                         cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            ed.open_lane_options(more_ids.clone(), e.position, cx);
+                            ed.open_lane_options(more_targets.clone(), e.position, cx);
                         }),
                     )
                     .child(
@@ -1394,35 +1530,42 @@ impl Editor {
             )
     }
 
-    /// A header switch over all of a lane's tracks: on for all when any is
-    /// off, else off. One undo step; locking drops the lane's clip from the
-    /// selection.
-    pub fn toggle_lanes_flag(
-        &mut self,
-        track_ids: Vec<String>,
-        flag: LaneFlag,
-        cx: &mut Context<Self>,
-    ) {
-        let get = |t: &Track| match flag {
-            LaneFlag::Locked => t.locked,
-            LaneFlag::Hidden => t.hidden,
-            LaneFlag::Muted => t.muted,
-        };
-        let tracks: Vec<&Track> = self
+    /// The Captions lane icon: selects the caption under the playhead,
+    /// else the next one, else the last.
+    pub fn select_caption_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let now = self.playhead;
+        let mut captions: Vec<&Clip> = self
             .project
             .tracks
             .iter()
-            .filter(|t| track_ids.contains(&t.id))
+            .filter(|t| !t.locked)
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.is_caption() && !c.locked())
             .collect();
-        if tracks.is_empty() {
-            return;
+        captions.sort_by_key(|c| c.timeline_start);
+        let pick = captions
+            .iter()
+            .find(|c| now < c.end())
+            .or(captions.last())
+            .map(|c| c.id.clone());
+        if let Some(id) = pick {
+            self.selected.set(id);
+            cx.notify();
         }
-        let on = !tracks.iter().all(|t| get(t));
+    }
+
+    /// A header switch over everything a lane covers: on for all when any
+    /// is off, else off. One undo step; locking drops the lane's clips from
+    /// the selection.
+    pub fn toggle_lane_flag(
+        &mut self,
+        targets: LaneTargets,
+        flag: LaneFlag,
+        cx: &mut Context<Self>,
+    ) {
+        let on = !targets.flag_on(&self.project, flag);
         if flag == LaneFlag::Locked && on {
-            let lane: Vec<String> = tracks
-                .iter()
-                .flat_map(|t| t.clips.iter().map(|c| c.id.clone()))
-                .collect();
+            let lane = targets.clip_ids(&self.project);
             self.selected.retain(|id| !lane.iter().any(|c| c == id));
         }
         let label = match flag {
@@ -1435,12 +1578,19 @@ impl Editor {
             false,
             None,
             |p| {
-                for t in p.tracks.iter_mut().filter(|t| track_ids.contains(&t.id)) {
-                    *match flag {
-                        LaneFlag::Locked => &mut t.locked,
-                        LaneFlag::Hidden => &mut t.hidden,
-                        LaneFlag::Muted => &mut t.muted,
-                    } = on;
+                for t in &mut p.tracks {
+                    if targets.track_ids.contains(&t.id) {
+                        *match flag {
+                            LaneFlag::Locked => &mut t.locked,
+                            LaneFlag::Hidden => &mut t.hidden,
+                            LaneFlag::Muted => &mut t.muted,
+                        } = on;
+                    }
+                    for c in &mut t.clips {
+                        if targets.clip_ids.contains(&c.id) {
+                            c.set_flag(flag.key(), on);
+                        }
+                    }
                 }
                 true
             },
@@ -1531,6 +1681,43 @@ mod tests {
         assert_eq!(stack[0].kind, LaneKind::Audio);
         assert_eq!(stack[0].height, LANE_HEIGHT * 2. + LANE_GAP);
         assert_eq!(h, stack[0].height + LANE_GAP);
+    }
+
+    #[test]
+    fn captions_get_their_own_one_row_lane() {
+        let mut p = Project::empty();
+        p.tracks.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "text", "type": "text", "name": "Text", "clips": [], "order": 3,
+                "muted": false, "hidden": false, "locked": false
+            }))
+            .unwrap(),
+        );
+        let text = p.tracks.len() - 1;
+        let mut cap = |id: &str, start: i64| {
+            let mut c = clip(id, start, 2);
+            c.extra.insert("caption".into(), serde_json::json!({}));
+            c
+        };
+        let (a, b) = (cap("c1", 0), cap("c2", 1)); // overlapping: still one row
+        let title = clip("t1", 0, 3);
+        p.tracks[text].clips.extend([a, b, title]);
+        let (_, stack, _) = lane_layouts(&p);
+        let kinds: Vec<LaneKind> = stack.iter().map(|l| l.kind).collect();
+        assert_eq!(kinds, [LaneKind::Captions, LaneKind::Text]);
+        assert_eq!(stack[0].height, LANE_HEIGHT);
+        assert_eq!(stack[0].targets.clip_ids, ["c1", "c2"]);
+        assert!(stack[0].targets.track_ids.is_empty());
+        assert_eq!(stack[1].targets.clip_ids, ["t1"]);
+        assert!(stack[1].holds(&p.tracks[text].clips[2]));
+        assert!(!stack[1].holds(&p.tracks[text].clips[0]));
+
+        // Locking the Captions lane locks the captions only.
+        for c in &mut p.tracks[text].clips[..2] {
+            c.set_flag("locked", true);
+        }
+        assert!(stack[0].targets.flag_on(&p, LaneFlag::Locked));
+        assert!(!stack[1].targets.flag_on(&p, LaneFlag::Locked));
     }
 
     #[test]

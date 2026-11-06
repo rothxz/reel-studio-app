@@ -157,8 +157,13 @@ isn't listed.
 - [~] Track headers: lane icon, Lock / Hide / Mute (lanes with sound) over
   all the lane's tracks, one undo step each; locking drops the lane's clips
   from the selection; "…" → Select all on track / Delete track. *No Cover
-  tile on the main lane; captions share the Text lane instead of their own
-  Captions lane.*
+  tile on the main lane.*
+- [x] Captions lane: auto captions (text clips with caption data) leave the
+  Text lane for their own lane at the top of the stack, one row, caption
+  colour. Captions and Text share the text track, so their switches set
+  the flags on their own clips (lane targets = tracks + clips, as the old
+  app); the CC icon selects the caption under the playhead (else the next,
+  else the last).
 - [x] Clip visuals: kind colours (old desktop palette), filmstrip tiles on
   video (decoded on a background thread, frames snapped to a time grid so
   zooming reuses them), the picture on images / stickers, the waveform on
@@ -261,8 +266,7 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline leftovers: Captions lane, Cover tile, keyframe diamonds, beat
-   dots.
+2. Timeline leftovers: Cover tile, keyframe diamonds, beat dots.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.

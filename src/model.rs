@@ -126,6 +126,25 @@ impl Clip {
         self.flag("muted")
     }
 
+    /// An auto caption: a text clip that carries its caption data. It
+    /// lives on the text track but the timeline gives captions a lane of
+    /// their own.
+    pub fn is_caption(&self) -> bool {
+        self.kind == "text" && self.extra.contains_key("caption")
+    }
+
+    /// Sets a lane switch on the clip itself (`locked`, `muted`; `hidden`
+    /// is a field): the lanes that share a track switch their own clips.
+    pub fn set_flag(&mut self, key: &str, on: bool) {
+        if key == "hidden" {
+            self.hidden = on;
+        } else if on {
+            self.extra.insert(key.into(), Value::Bool(true));
+        } else {
+            self.extra.remove(key);
+        }
+    }
+
     /// Clip volume, 1 = as recorded.
     pub fn volume(&self) -> f64 {
         self.extra
