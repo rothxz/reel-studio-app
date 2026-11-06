@@ -150,14 +150,13 @@ impl Editor {
                                 let items = RESOLUTIONS
                                     .iter()
                                     .enumerate()
-                                    .map(|(i, (label, _))| PopupItem {
-                                        label: (*label).into(),
-                                        checked: ed.prefs.export_resolution == i,
-                                        run: std::rc::Rc::new(move |ed: &mut Editor, _, cx| {
+                                    .map(|(i, (label, _))| {
+                                        PopupItem::new(*label, move |ed: &mut Editor, _, cx| {
                                             ed.prefs.export_resolution = i;
                                             ed.prefs.save();
                                             cx.notify();
-                                        }),
+                                        })
+                                        .checked(ed.prefs.export_resolution == i)
                                     })
                                     .collect();
                                 ed.open_popup(e.position(), items, cx);

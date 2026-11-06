@@ -184,7 +184,7 @@ mod imp {
                 return vec![];
             };
             let mut tracks: Vec<_> = p.tracks.iter().filter(|t| !t.hidden).collect();
-            tracks.sort_by_key(|t| t.order);
+            tracks.sort_by(|a, b| a.order.total_cmp(&b.order));
             tracks
                 .into_iter()
                 .flat_map(|track| {

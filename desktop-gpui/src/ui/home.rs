@@ -206,29 +206,22 @@ impl Editor {
                 cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
                     let (open, delete, name) = (menu_id.clone(), menu_id.clone(), name.clone());
                     let items = vec![
-                        PopupItem {
-                            label: "Open".into(),
-                            checked: false,
-                            run: Rc::new(move |ed: &mut Editor, _, cx| {
-                                ed.open_saved_project(&open, cx)
-                            }),
-                        },
-                        PopupItem {
-                            label: "Delete…".into(),
-                            checked: false,
-                            run: Rc::new(move |ed: &mut Editor, _, cx| {
-                                let id = delete.clone();
-                                ed.confirm = Some(Confirm {
-                                    title: "Delete 1 project?".into(),
-                                    message: format!("“{name}”. This can't be undone.").into(),
-                                    confirm_label: "Delete".into(),
-                                    run: Rc::new(move |ed: &mut Editor, _, cx| {
-                                        ed.delete_saved_project(&id, cx)
-                                    }),
-                                });
-                                cx.notify();
-                            }),
-                        },
+                        PopupItem::new("Open", move |ed: &mut Editor, _, cx| {
+                            ed.open_saved_project(&open, cx)
+                        }),
+                        PopupItem::new("Delete…", move |ed: &mut Editor, _, cx| {
+                            let id = delete.clone();
+                            ed.confirm = Some(Confirm {
+                                title: "Delete 1 project?".into(),
+                                message: format!("“{name}”. This can't be undone.").into(),
+                                confirm_label: "Delete".into(),
+                                run: Rc::new(move |ed: &mut Editor, _, cx| {
+                                    ed.delete_saved_project(&id, cx)
+                                }),
+                            });
+                            cx.notify();
+                        })
+                        .destructive(),
                     ];
                     ed.open_popup(e.position, items, cx);
                 }),

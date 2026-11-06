@@ -70,11 +70,14 @@ src/model.rs       Project document (serde): same JSON as the app; unknown field
 src/projects.rs    projects folder: list / load / save (atomic) / delete
 src/prefs.rs       panel sizes + timeline switches, data folder
 src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
-src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source
+src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source,
+                   filmstrip tile thread, waveform peaks
 src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono)
 src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    header, home, browser, player, inspector, toolbar,
-                   timeline, dialogs (popup, confirm, shortcuts), widgets,
+                   timeline (lane layout + drawing), timeline_edit (clip
+                   drag / trim / snapping, drops, wheel, right-click menus),
+                   dialogs (popup, confirm, shortcuts), widgets,
                    icons (icon fonts served as SVG)
 engine-shim/       C ABI over videoengine::Engine (+ FindActiveClips etc.)
 assets/fonts/      bundled fonts + licences

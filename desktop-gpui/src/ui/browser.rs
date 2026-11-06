@@ -10,6 +10,7 @@ use crate::editor::Editor;
 use crate::model::{MediaItem, Micros, SECOND};
 use crate::theme;
 use crate::ui::icons::Icon;
+use crate::ui::timeline_edit::{DragChip, MediaDrag};
 use crate::ui::widgets::{label_text, mono};
 
 pub struct BrowserTab {
@@ -319,6 +320,10 @@ impl Editor {
             .cursor_pointer()
             .group("tile")
             .on_click(cx.listener(move |ed, _, _, cx| ed.add_at_playhead(&for_click, cx)))
+            // Or dragged onto the timeline (timeline_edit.rs places it).
+            .on_drag(MediaDrag(item.clone()), |drag, _, _, cx| {
+                cx.new(|_| DragChip::new(&drag.0))
+            })
             .child(
                 div()
                     .relative()

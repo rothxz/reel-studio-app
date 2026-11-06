@@ -10,8 +10,9 @@ use crate::theme;
 use crate::ui::icons::Icon;
 use crate::ui::widgets::{keycap, label_text};
 
-const MENU_WIDTH: f32 = 180.;
+const MENU_WIDTH: f32 = 220.;
 const ITEM_HEIGHT: f32 = 28.;
+const SEPARATOR_HEIGHT: f32 = 9.;
 
 /// The open popup: a click outside closes it, a click on an item runs it.
 pub fn popup_menu(
@@ -20,32 +21,38 @@ pub fn popup_menu(
     cx: &mut Context<Editor>,
 ) -> impl IntoElement {
     // Kept inside the window.
-    let height = popup.items.len() as f32 * ITEM_HEIGHT + 10.;
+    let height: f32 = popup
+        .items
+        .iter()
+        .map(|i| {
+            if i.separator {
+                SEPARATOR_HEIGHT
+            } else {
+                ITEM_HEIGHT
+            }
+        })
+        .sum::<f32>()
+        + 10.;
     let x = f32::from(popup.at.x)
         .min(f32::from(viewport.width) - MENU_WIDTH - 8.)
         .max(8.);
     let y = f32::from(popup.at.y)
         .min(f32::from(viewport.height) - height - 14.)
         .max(8.);
+    let close = |ed: &mut Editor,
+                 _: &gpui::MouseDownEvent,
+                 _: &mut gpui::Window,
+                 cx: &mut Context<Editor>| {
+        ed.popup = None;
+        cx.notify();
+    };
     div()
         .id("popup-backdrop")
         .absolute()
         .inset_0()
         .occlude()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|ed, _, _, cx| {
-                ed.popup = None;
-                cx.notify();
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(|ed, _, _, cx| {
-                ed.popup = None;
-                cx.notify();
-            }),
-        )
+        .on_mouse_down(MouseButton::Left, cx.listener(close))
+        .on_mouse_down(MouseButton::Right, cx.listener(close))
         .child(
             div()
                 .absolute()
@@ -61,7 +68,23 @@ pub fn popup_menu(
                 .flex()
                 .flex_col()
                 .children(popup.items.iter().enumerate().map(|(i, item)| {
+                    if item.separator {
+                        return div()
+                            .h(px(SEPARATOR_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .child(div().h(px(1.)).w_full().bg(theme::chip_border()))
+                            .into_any_element();
+                    }
                     let run = item.run.clone();
+                    let disabled = item.disabled;
+                    let color = if disabled {
+                        theme::text_disabled()
+                    } else if item.destructive {
+                        theme::danger()
+                    } else {
+                        theme::text()
+                    };
                     div()
                         .id(("popup-item", i))
                         .h(px(ITEM_HEIGHT))
@@ -70,22 +93,33 @@ pub fn popup_menu(
                         .items_center()
                         .gap_2()
                         .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::button_hover()))
                         .text_size(px(theme::SM))
-                        .text_color(theme::text())
+                        .text_color(color)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |ed, _, w, cx| {
-                            ed.popup = None;
-                            run(ed, w, cx);
-                            cx.notify();
-                        }))
+                        .when(!disabled, |d| {
+                            d.cursor_pointer()
+                                .hover(|s| s.bg(theme::button_hover()))
+                                .on_click(cx.listener(move |ed, _, w, cx| {
+                                    ed.popup = None;
+                                    run(ed, w, cx);
+                                    cx.notify();
+                                }))
+                        })
                         .child(div().w(px(14.)).child(if item.checked {
-                            Icon::Checkmark.el(14., theme::text()).into_any_element()
+                            Icon::Checkmark.el(14., color).into_any_element()
                         } else {
                             div().into_any_element()
                         }))
-                        .child(item.label.clone())
+                        .child(div().flex_1().child(item.label.clone()))
+                        .when_some(item.hint.clone(), |d, hint| {
+                            d.child(
+                                div()
+                                    .text_size(px(theme::XS))
+                                    .text_color(theme::text_tertiary())
+                                    .child(hint),
+                            )
+                        })
+                        .into_any_element()
                 })),
         )
 }

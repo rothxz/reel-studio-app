@@ -62,8 +62,8 @@ isn't listed.
   video from them)
 - [~] Media tile: thumbnail (decoded off the UI thread), MM:SS, "Added"
   badge, hover border + ⊕, click inserts on the main lane at the playhead
-  (before the clip whose middle is past it). *No drag onto the timeline,
-  no context menu.*
+  (before the clip whose middle is past it), drag onto the timeline.
+  *No context menu.*
 - [ ] Audio: Music (catalog + search), Sound effects, Voiceover (record)
 - [ ] Text: Add text (Default, Draw), Text templates
 - [ ] Stickers: stickers, GIFs (catalog via the media proxy)
@@ -138,36 +138,69 @@ isn't listed.
   replace, crop, freeze, reverse, extract audio, rotate…*
 - [~] Keyframe ◇. *Shown disabled until keyframes are editable.*
 - [x] Toggles: main-lane magnet (P), linkage, preview axis (S), snapping
-  (N), with toasts; remembered. *Preview axis and snapping have nothing to
-  act on yet (no skim, no drag).*
+  (N), with toasts; remembered.
 - [x] Zoom to fit (⇧Z), zoom −/log slider/+ (⌘- / ⌘=, ×1.5, 4–400 px/s)
 
 ## Timeline
 
-- [x] Ruler with timecode ticks; scrub by click/drag; playhead line
-- [x] Lanes with clips, selection, wheel scroll, ⌘/ctrl-wheel zoom
-- [x] Timecode readout at the top-left (`current / total`)
-- [~] Lane headers: name; lock / eye / speaker toggles (undoable). *No
-  Cover button, no "…" menu.*
-- [~] Lane stacking: other lanes above the main lane (highest order on
-  top), audio below; main 56 px, others 32 px, 6 px gaps. *No add/remove
-  lanes, no vertical scroll, no sub-rows for overlapping clips.*
-- [~] Clip colours per kind (old palette), deactivated / hidden-lane clips
-  dimmed, speed badge.
-- [ ] Clip visuals: filmstrip thumbnails, audio waveform, name, speed
-  badge, mute icon, keyframe diamonds, beat dots
-- [ ] Transition seam button between main-lane clips (+ seam geometry)
-- [ ] Drag clips (within/between lanes), trim handles, ripple on main lane,
-  snapping guides, drop from browser, edge auto-scroll
+- [x] Ruler: tick lines with "00:02" / "00:01.5" labels beside them (label
+  step ≥ 96 px apart, minor ticks between), running past the end; click /
+  drag on it or on empty lane space scrubs (and deselects)
+- [x] Layout as the old desktop timeline: ruler, the main lane (56 px) under
+  it, then a stack of the lanes that hold clips (Overlay video, Effects,
+  Audio, Text + stickers; 32 px rows, 6 px gaps). Empty lanes aren't drawn.
+- [x] Sub-rows: clips overlapping on a lane stack in rows (`assign_rows`)
+- [x] Vertical scroll of the lane stack (wheel) with a scrollbar while it
+  overflows; ⇧ + wheel sideways; ⌘ / ctrl + wheel zooms around the pointer;
+  ⌘= / ⌘- zoom around the playhead; ⇧Z fits (80 px left after the end)
+- [x] Playhead: shield on the ruler + line; timecode readout top left
+- [~] Track headers: lane icon, Lock / Hide / Mute (lanes with sound) over
+  all the lane's tracks, one undo step each; locking drops the selection;
+  "…" → Delete track. *No Cover tile on the main lane; no "Select all on
+  track" (needs multi-select); captions share the Text lane instead of
+  their own Captions lane.*
+- [x] Clip visuals: kind colours (old desktop palette), filmstrip tiles on
+  video (decoded on a background thread, frames snapped to a time grid so
+  zooming reuses them), the picture on images / stickers, the waveform on
+  audio (FFmpeg peaks, clip volume), name + length strip on pictures,
+  speed badge, lock / mute badges, hover outline, white selection outline,
+  deactivated / hidden lanes dimmed. *Filmstrip ignores speed curves; no
+  keyframe diamonds or beat dots yet.*
+- [x] Transition seams: boxes meet mid-overlap; a button between main
+  clips (opens the browser's Transitions tab, which isn't ported yet)
+- [x] Drag clips: press-drag moves (selects it); the old slot stays as a
+  grey box, the clip follows see-through; snapping to 00:00 and clip edges
+  (either edge of a moved clip) with a guide line; Esc cancels
+- [x] Main lane + magnet: a dragged main clip goes in at the nearest cut
+  (insert line), the lane re-packs; magnet off: a plain move
+- [x] Pictures change lanes: a main clip pulled below the main lane lands
+  on a free overlay video lane (a new one when none is free) and the gap
+  closes; an overlay picture pulled onto the main lane goes in at the
+  nearest cut (magnet) or where it was let go
+- [x] Trim handles on the selected clip (10 px, white): either edge, live,
+  snapped, ≥ 0.6 s, never before 00:00 nor past the media's start / end;
+  source window follows; on the main lane the magnet closes up (+ linkage)
+- [x] Edge auto-scroll while dragging a clip or scrubbing
+- [x] Drop from the media library (drag a tile) or the desktop (files):
+  on the ruler / main lane in at the cut nearest the pointer (insert line),
+  below it on an overlay lane from that time (ghost); sound to the audio
+  lane at that time. One undo step.
+- [x] Click a clip selects it (no seek, as the old app); the Split tool
+  cuts it; a locked clip acts like empty space
 - [~] Copy / cut / paste / duplicate (⌘C/X/V/D): in-app clipboard; paste on
   the main lane goes in at the cut after the clip under the playhead.
   *No multi-select.*
-- [ ] Context menus (clip, lane, empty area)
-- [ ] Skim (hover preview) if the old app has it (`timelineSkim.ts`)
+- [x] Context menus: clip (Copy, Cut, Paste, Delete, Split, Duplicate,
+  Deactivate / Activate, with shortcut hints and disabled states), empty
+  lane space (Paste, Split, main track magnet, linkage, preview axis,
+  snapping, zoom to fit), lane "…" (Delete track)
+- [x] Hover line; with the preview axis on the player shows the hovered
+  frame while the playhead stays put (any press or leaving ends it)
 
 ## Edits + document
 
-- [x] Same JSON document as the app; unknown fields round-trip
+- [x] Same JSON document as the app; unknown fields round-trip; lane
+  `order` is a float (the app slots lanes at halves)
 - [x] Insert media at the playhead, split (reversed / freeze aware), delete,
   speed, delete left/right (trims the source window like `trimmedSource`),
   duplicate, paste, deactivate (clip `hidden`), lane flags, canvas ratio
@@ -207,7 +240,7 @@ isn't listed.
 | Undo / redo | ⌘Z / ⌘⇧Z, ⌘Y | [x] |
 | Deselect | Esc | [x] (full screen → split tool → popup → selection) |
 | Zoom in / out / fit | ⌘= / ⌘- / ⇧Z | [x] |
-| Preview axis / snapping / main magnet | S / N / P | [x] toggles; axis + snapping act on nothing yet |
+| Preview axis / snapping / main magnet | S / N / P | [x] |
 | Select tool / split tool | A / B | [x] |
 | Fullscreen | ⌘⇧F | [x] |
 | Export | ⌘E | [~] toast until export exists |
@@ -220,8 +253,8 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline interaction: drag / trim clips, snapping guides, drop from the
-   library, context menus, vertical lane scroll, filmstrip + waveform.
+2. Timeline leftovers: multi-select (rubber band, ⇧/⌘ click, "Select all
+   on track"), Captions lane, Cover tile, keyframe diamonds, beat dots.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.

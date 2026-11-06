@@ -1,187 +1,700 @@
-//! The timeline: a ruler with the playhead's timecode at the top left,
-//! lanes stacked overlays-above / main / audio-below, each with a header
-//! (name, lock, eye, speaker), clips coloured by kind. Click or drag on the
-//! ruler or empty lane space scrubs; a click on a clip selects it (or, with
-//! the Split tool, cuts it there); the wheel scrolls, ⌘/ctrl + wheel zooms.
+//! The timeline, after the old desktop editor's (`Timeline.tsx`,
+//! `TimelineLanes.tsx`, `TimelineClip.tsx`): the ruler on top, the main lane
+//! under it, then a stack of the other lanes that hold clips (overlay
+//! video, effects, audio, text) which scrolls vertically when it doesn't
+//! fit. Overlapping clips on a lane stack in sub-rows. A track header
+//! column on the left holds each lane's icon and lock / eye / speaker / …
+//! switches.
+//!
+//! Clips draw by kind: video as a filmstrip under a name + length strip,
+//! images as their picture, audio as a waveform, the rest as a label. The
+//! selected clip gets trim handles. The interaction lives in
+//! `timeline_edit.rs`.
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use gpui::{
-    Context, CursorStyle, FontWeight, MouseButton, MouseDownEvent, Rgba, ScrollWheelEvent,
-    SharedString, div, prelude::*, px,
+    AnyElement, Bounds, Context, CursorStyle, DragMoveEvent, ExternalPaths, FontWeight,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Rgba, ScrollWheelEvent,
+    SharedString, canvas, div, fill, img, point, prelude::*, px, rgb, rgba, size,
 };
 
-use crate::editor::{Drag, Editor, Tool};
-use crate::model::{Micros, SECOND, Track, TrackType};
+use crate::decoder::{self, Waveform};
+use crate::editor::{Drag, Editor, Tool, timecode};
+use crate::model::{Clip, Micros, Project, SECOND, Side, Track, TrackType};
 use crate::theme;
 use crate::ui::icons::Icon;
+use crate::ui::timeline_edit::{ClipDragMode, MediaDrag, MediaDrop};
 use crate::ui::widgets::{icon_button, mono};
 
-const MAIN_LANE_HEIGHT: f32 = 56.;
-const LANE_HEIGHT: f32 = 32.;
-const LANE_GAP: f32 = 6.;
-const RULER_HEIGHT: f32 = 20.;
-const LANES_TOP: f32 = 8.;
-pub const LANE_HEADER_WIDTH: f32 = 160.;
+// ---- geometry (y from the top of the lane area) ------------------------------
 
-/// Which flag a lane header toggles.
-#[derive(Clone, Copy)]
+pub const TOP_PAD: f32 = 8.;
+pub const RULER_HEIGHT: f32 = 20.;
+pub const MAIN_TOP: f32 = TOP_PAD + RULER_HEIGHT + 4.;
+pub const MAIN_LANE_HEIGHT: f32 = 56.;
+pub const MAIN_BOTTOM: f32 = MAIN_TOP + MAIN_LANE_HEIGHT;
+/// Where the lane stack's window starts.
+pub const STACK_TOP: f32 = MAIN_BOTTOM + 6.;
+pub const LANE_HEIGHT: f32 = 32.;
+pub const LANE_GAP: f32 = 6.;
+/// Room under the last lane.
+pub const BOTTOM_PAD: f32 = 12.;
+pub const LANE_HEADER_WIDTH: f32 = 160.;
+/// How close (px) an edge must come to snap.
+pub const SNAP_PX: f32 = 10.;
+/// The shortest a trim leaves a clip.
+pub const MIN_CLIP: Micros = 600_000;
+/// The name + length strip along a video / image clip's top.
+const NAME_STRIP: f32 = 17.;
+
+// ---- filmstrip ----------------------------------------------------------------
+
+/// Target on-screen width of a filmstrip tile.
+const TILE_WIDTH: f32 = 44.;
+const MAX_TILES: usize = 400;
+/// Source-time grids a tile's frame snaps to, finest first: each divides
+/// the next, so frames picked zoomed out are reused zoomed in.
+const TILE_GRID: [Micros; 10] = [
+    125_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000, 32_000_000,
+    64_000_000,
+];
+/// Keeps a snapped frame off the segment's exclusive end.
+const SEGMENT_END_GUARD: Micros = 33_333;
+/// Waveform column spacing (px).
+const WAVE_STEP: f32 = 2.;
+
+/// Which lane of the stack a track's clips are drawn on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneKind {
+    Main,
+    Overlay,
+    Effect,
+    Audio,
+    Text,
+}
+
+impl LaneKind {
+    fn icon(self) -> Icon {
+        match self {
+            LaneKind::Main => Icon::Filmstrip,
+            LaneKind::Overlay => Icon::Layers,
+            LaneKind::Effect => Icon::Sparkle4,
+            LaneKind::Audio => Icon::MusicalNote,
+            LaneKind::Text => Icon::Title,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            LaneKind::Main => "Main track",
+            LaneKind::Overlay => "Overlay",
+            LaneKind::Effect => "Effects",
+            LaneKind::Audio => "Audio",
+            LaneKind::Text => "Text",
+        }
+    }
+    /// The lane carries sound: it gets a speaker switch.
+    fn has_sound(self) -> bool {
+        matches!(self, LaneKind::Main | LaneKind::Overlay | LaneKind::Audio)
+    }
+}
+
+/// One drawn lane: the tracks it shows and where its clips sit.
+pub struct LaneLayout {
+    pub kind: LaneKind,
+    pub track_ids: Vec<String>,
+    /// Top: in the lane area (main), or in the stack's content (others).
+    pub top: f32,
+    pub height: f32,
+    pub row_height: f32,
+    /// Sub-row per clip id (overlapping clips stack).
+    pub rows: HashMap<String, usize>,
+}
+
+impl LaneLayout {
+    fn clip_top(&self, clip_id: &str) -> f32 {
+        let row = self.rows.get(clip_id).copied().unwrap_or(0);
+        self.top + row as f32 * (self.row_height + LANE_GAP)
+    }
+}
+
+/// Sub-rows for clips that overlap in time: each clip takes the first row
+/// free at its start. Returns the row per clip and how many rows.
+pub fn assign_rows<'a>(clips: impl Iterator<Item = &'a Clip>) -> (HashMap<String, usize>, usize) {
+    let mut sorted: Vec<&Clip> = clips.collect();
+    sorted.sort_by(|a, b| {
+        a.timeline_start
+            .cmp(&b.timeline_start)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let mut row_end: Vec<Micros> = vec![];
+    let mut rows = HashMap::new();
+    for clip in sorted {
+        let row = match row_end.iter().position(|&end| end <= clip.timeline_start) {
+            Some(r) => r,
+            None => {
+                row_end.push(0);
+                row_end.len() - 1
+            }
+        };
+        row_end[row] = clip.end();
+        rows.insert(clip.id.clone(), row);
+    }
+    let count = row_end.len().max(1);
+    (rows, count)
+}
+
+/// The main lane and the stack under it (only lanes that hold clips, in
+/// the old editor's order), and the stack's content height.
+pub fn lane_layouts(project: &Project) -> (LaneLayout, Vec<LaneLayout>, f32) {
+    let main_id = project.main_track().map(|t| t.id.clone());
+    let main = LaneLayout {
+        kind: LaneKind::Main,
+        track_ids: main_id.iter().cloned().collect(),
+        top: MAIN_TOP,
+        height: MAIN_LANE_HEIGHT,
+        row_height: MAIN_LANE_HEIGHT,
+        rows: HashMap::new(),
+    };
+    let kind_of = |t: &Track| -> LaneKind {
+        match t.kind {
+            TrackType::Video => LaneKind::Overlay, // a second "video" track
+            TrackType::Overlay if t.is_overlay_video(&project.id) => LaneKind::Overlay,
+            TrackType::Overlay | TrackType::Text => LaneKind::Text,
+            TrackType::Effect => LaneKind::Effect,
+            TrackType::Audio => LaneKind::Audio,
+        }
+    };
+    let mut stack = vec![];
+    let mut top = 0.;
+    for kind in [
+        LaneKind::Overlay,
+        LaneKind::Effect,
+        LaneKind::Audio,
+        LaneKind::Text,
+    ] {
+        let tracks: Vec<&Track> = project
+            .tracks
+            .iter()
+            .filter(|t| Some(&t.id) != main_id.as_ref() && kind_of(t) == kind)
+            .collect();
+        if tracks.iter().all(|t| t.clips.is_empty()) {
+            continue;
+        }
+        let (rows, count) = assign_rows(tracks.iter().flat_map(|t| t.clips.iter()));
+        let height = LANE_HEIGHT * count as f32 + LANE_GAP * (count - 1) as f32;
+        stack.push(LaneLayout {
+            kind,
+            track_ids: tracks.iter().map(|t| t.id.clone()).collect(),
+            top,
+            height,
+            row_height: LANE_HEIGHT,
+            rows,
+        });
+        top += height + LANE_GAP;
+    }
+    (main, stack, top)
+}
+
+/// How much of each main clip's span the box leaves to a neighbour it
+/// overlaps through a transition (micros at its start, its end): the two
+/// boxes meet mid-overlap, the times stay true.
+pub fn transition_seams(clips: &[&Clip]) -> HashMap<String, (Micros, Micros)> {
+    let mut seams: HashMap<String, (Micros, Micros)> = HashMap::new();
+    for pair in clips.windows(2) {
+        let (prev, clip) = (pair[0], pair[1]);
+        if prev.out_transition() == 0 {
+            continue;
+        }
+        let overlap = prev.end() - clip.timeline_start;
+        if overlap <= 0 {
+            continue;
+        }
+        seams.entry(prev.id.clone()).or_default().1 = overlap / 2;
+        seams.entry(clip.id.clone()).or_default().0 = overlap / 2;
+    }
+    seams
+}
+
+/// The coarsest frame grid no wider than a tile's source step (0: too
+/// dense to snap).
+fn tile_grid(step: f64) -> Micros {
+    TILE_GRID
+        .iter()
+        .copied()
+        .take_while(|&g| g as f64 <= step)
+        .last()
+        .unwrap_or(0)
+}
+
+/// The source time shown `offset` into `clip` (constant speed; reversed
+/// and freeze aware).
+fn source_time_at(clip: &Clip, offset: Micros) -> Micros {
+    let start = clip.source_start.unwrap_or(0);
+    if clip.freeze() {
+        return start;
+    }
+    let speed = if clip.speed > 0. { clip.speed } else { 1. };
+    let forward = (offset as f64 * speed) as Micros;
+    if clip.reversed() {
+        let segment = (clip.timeline_duration as f64 * speed) as Micros;
+        start + (segment - forward).max(0)
+    } else {
+        start + forward
+    }
+}
+
+/// A video clip's filmstrip `width` px wide: the tile width and each
+/// tile's source time (centred in its slot, snapped to a grid so zooming
+/// reuses frames).
+fn filmstrip(clip: &Clip, width: f32) -> (f32, Vec<Micros>) {
+    let count = ((width / TILE_WIDTH).round() as usize).clamp(1, MAX_TILES);
+    let speed = if clip.speed > 0. { clip.speed } else { 1. };
+    let grid = if clip.freeze() || count == 1 {
+        0
+    } else {
+        tile_grid(clip.timeline_duration as f64 / count as f64 * speed)
+    };
+    let seg_start = clip.source_start.unwrap_or(0);
+    let seg_end = seg_start
+        .max(seg_start + (clip.timeline_duration as f64 * speed) as Micros - SEGMENT_END_GUARD);
+    let times = (0..count)
+        .map(|i| {
+            let offset =
+                ((i as f64 + 0.5) * clip.timeline_duration as f64 / count as f64) as Micros;
+            let exact = source_time_at(clip, offset);
+            if grid > 0 {
+                (((exact as f64 / grid as f64).round() as Micros) * grid).clamp(seg_start, seg_end)
+            } else {
+                exact
+            }
+        })
+        .collect();
+    (width / count as f32, times)
+}
+
+/// Clip fills by kind (the old desktop timeline's).
+fn clip_color(kind: &str) -> Rgba {
+    match kind {
+        "video" | "image" => rgb(0x1d4a4e),
+        "audio" => rgb(0x1f4a6e),
+        "text" => rgb(0x9a4b32),
+        "sticker" => rgb(0xa8792a),
+        "drawing" => rgb(0x3d6b4d),
+        "effect" => rgb(0x5a3ea3),
+        _ => theme::clip_sticker(),
+    }
+}
+
+/// "00:02", or "00:01.5" on a half-second step.
+fn ruler_label(seconds: f64) -> String {
+    let whole = seconds.floor() as i64;
+    let mmss = format!("{:02}:{:02}", whole / 60, whole % 60);
+    let frac = seconds - whole as f64;
+    if frac > 0.001 {
+        format!("{mmss}.{}", (frac * 10.).round() as i64)
+    } else {
+        mmss
+    }
+}
+
+/// Minor ticks per labelled ruler step.
+fn minor_divisions(major: f64) -> u32 {
+    match major {
+        m if m == 2. || m == 120. => 4,
+        15. => 3,
+        30. => 6,
+        _ => 5,
+    }
+}
+
+/// A lane switch in the track header.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LaneFlag {
     Locked,
     Hidden,
     Muted,
 }
 
-fn clip_color(kind: &str) -> Rgba {
-    match kind {
-        "video" | "image" => theme::clip_video(),
-        "audio" => theme::clip_audio(),
-        "text" => theme::clip_text(),
-        "sticker" | "drawing" => theme::clip_sticker(),
-        "effect" => theme::clip_effect(),
-        _ => theme::clip_sticker(),
-    }
-}
-
-/// "MM:SS" on the ruler.
-fn ruler_label(t: Micros) -> String {
-    let s = t.max(0) / SECOND;
-    format!("{:02}:{:02}", s / 60, s % 60)
-}
-
-/// Lanes top to bottom: lanes above the main one (highest order first),
-/// the main lane, then sound lanes.
-pub fn lane_order(tracks: &[Track]) -> Vec<&Track> {
-    let main_id = tracks
-        .iter()
-        .find(|t| t.kind == TrackType::Video)
-        .map(|t| t.id.as_str());
-    let mut above: Vec<&Track> = tracks
-        .iter()
-        .filter(|t| Some(t.id.as_str()) != main_id && t.kind != TrackType::Audio)
-        .collect();
-    above.sort_by_key(|t| -t.order);
-    let mut below: Vec<&Track> = tracks
-        .iter()
-        .filter(|t| t.kind == TrackType::Audio)
-        .collect();
-    below.sort_by_key(|t| t.order);
-    above
-        .into_iter()
-        .chain(tracks.iter().filter(|t| Some(t.id.as_str()) == main_id))
-        .chain(below)
-        .collect()
+/// Where a clip is drawn this frame.
+struct ClipGeom {
+    /// Lane-area x of the clip's true start, and its true width (px).
+    x: f32,
+    w: f32,
+    /// Box insets at transition seams (px, start / end).
+    inset: (f32, f32),
+    y: f32,
+    h: f32,
+    /// Being moved: drawn see-through, no handles.
+    moving: bool,
 }
 
 impl Editor {
-    pub fn render_timeline(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let fps = self.fps();
-        let main_id = self.project.main_track().map(|t| t.id.clone());
-        let lanes_width = self
-            .measured("lanes")
-            .map_or(2000., |b| f32::from(b.size.width));
+    /// Asks for whatever the visible clips draw that isn't loaded yet:
+    /// filmstrip tiles, still pictures, waveforms.
+    fn request_timeline_media(&mut self, width: f32, cx: &mut Context<Self>) {
+        let pps = self.pps;
+        let mut tiles = vec![];
+        let mut stills = vec![];
+        let mut sounds = vec![];
+        for clip in self.project.tracks.iter().flat_map(|t| t.clips.iter()) {
+            let Some(src) = clip.source.as_deref().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let x = self.x_of(clip.timeline_start);
+            let w = clip.timeline_duration as f32 / SECOND as f32 * pps;
+            if x > width || x + w < 0. {
+                continue;
+            }
+            match clip.kind.as_str() {
+                "video" => {
+                    let (tw, times) = filmstrip(clip, w);
+                    for (i, t) in times.into_iter().enumerate() {
+                        let tx = x + i as f32 * tw;
+                        if tx + tw >= 0. && tx <= width {
+                            tiles.push((src.to_string(), t));
+                        }
+                    }
+                }
+                "image" | "sticker" => stills.push(src.to_string()),
+                "audio" => sounds.push(src.to_string()),
+                _ => {}
+            }
+        }
+        for key in tiles {
+            if !self.tiles.contains_key(&key) && self.tiles_pending.insert(key.clone()) {
+                self.tile_server.request(&key.0, key.1);
+            }
+        }
+        for src in stills {
+            self.load_thumbnail(src, 0, cx);
+        }
+        for src in sounds {
+            if self.waves.contains_key(&src) {
+                continue;
+            }
+            self.waves.insert(src.clone(), None);
+            let path = src.clone();
+            let task = cx
+                .background_executor()
+                .spawn(async move { decoder::waveform(&path) });
+            cx.spawn(async move |this, cx| {
+                let Ok(wave) = task.await else { return };
+                this.update(cx, |ed, cx| {
+                    ed.waves.insert(src, Some(Arc::new(wave)));
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
 
-        // Ruler ticks: a step that keeps labels ~80 px apart.
+    pub fn render_timeline(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let fps = self.fps();
+        let (main_lane, stack, stack_height) = lane_layouts(&self.project);
+        let lanes = self.measured("lanes");
+        let width = lanes.map_or(2000., |b| f32::from(b.size.width));
+        let height = lanes.map_or(400., |b| f32::from(b.size.height));
+        let window_h = (height - STACK_TOP - BOTTOM_PAD).max(LANE_HEIGHT);
+        self.lane_scroll_y = self
+            .lane_scroll_y
+            .clamp(0., (stack_height - window_h).max(0.));
+        self.request_timeline_media(width, cx);
+        let scroll_y = self.lane_scroll_y;
+        let split_tool = self.tool == Tool::Split;
+
+        // The clip being moved / trimmed, as it is right now.
+        let live = match &self.drag {
+            Some(Drag::Clip(d)) if d.started => Some((
+                d.clip_id.clone(),
+                d.mode,
+                d.live_start,
+                d.live_duration,
+                d.dy,
+                d.lane_movable,
+            )),
+            _ => None,
+        };
+        let moving_id = live
+            .as_ref()
+            .filter(|l| l.1 == ClipDragMode::Move)
+            .map(|l| l.0.clone());
+
+        // ---- ruler
         let steps = [0.5, 1., 2., 5., 10., 15., 30., 60., 120., 300., 600.];
-        let step = steps
+        let major = steps
             .iter()
             .copied()
-            .find(|s| s * self.pps as f64 >= 80.)
+            .find(|s| s * self.pps as f64 >= 96.)
             .unwrap_or(1200.);
-        let first = (self.scroll_x as f64 / self.pps as f64 / step).floor() * step;
-        let last = first + (lanes_width as f64 / self.pps as f64) + step;
-        let mut ticks = vec![];
-        let mut s = first;
-        while s <= last {
-            let t = (s * SECOND as f64) as Micros;
-            ticks.push(
+        let divisions = minor_divisions(major);
+        let step = major / divisions as f64;
+        let first = (self.scroll_x as f64 / self.pps as f64 / step).floor() as i64;
+        let last = ((self.scroll_x + width) as f64 / self.pps as f64 / step).ceil() as i64;
+        let ticks = (first.max(0)..=last).map(|k| {
+            let seconds = k as f64 * step;
+            let x = self.x_of((seconds * SECOND as f64) as Micros);
+            let is_major = k % divisions as i64 == 0;
+            div()
+                .absolute()
+                .left(px(x))
+                .top_0()
+                .h(px(RULER_HEIGHT))
+                .flex()
+                .items_end()
+                .child(
+                    div()
+                        .w(px(1.))
+                        .h(px(if is_major { RULER_HEIGHT } else { 4. }))
+                        .bg(theme::fill_strong()),
+                )
+                .when(is_major, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .top(px(3.))
+                            .whitespace_nowrap()
+                            .child(mono(
+                                ruler_label(seconds),
+                                theme::XXS,
+                                theme::text_tertiary(),
+                            )),
+                    )
+                })
+        });
+
+        // ---- main lane
+        let main_track = self.project.main_track().cloned();
+        let ordered: Vec<Clip> = self
+            .project
+            .ordered_main_clips()
+            .into_iter()
+            .cloned()
+            .collect();
+        let seams = transition_seams(&ordered.iter().collect::<Vec<_>>());
+        let pps = self.pps;
+        let to_px = |m: Micros| m as f32 / SECOND as f32 * pps;
+        let mut main_clips: Vec<(bool, AnyElement)> = vec![];
+        let mut slots: Vec<AnyElement> = vec![];
+        let mut floating: Option<AnyElement> = None;
+
+        // Places one clip: in its lane (y relative to the lane box), or,
+        // while it's being moved, over everything in lane-area coordinates.
+        let place = |ed: &Editor,
+                     clip: &Clip,
+                     track: &Track,
+                     lane_y: f32,
+                     area_y: f32,
+                     h: f32,
+                     inset: (Micros, Micros),
+                     cx: &mut Context<Editor>|
+         -> (Option<AnyElement>, Option<AnyElement>, Option<AnyElement>) {
+            let geom = ClipGeom {
+                x: ed.x_of(clip.timeline_start),
+                w: to_px(clip.timeline_duration),
+                inset: (to_px(inset.0), to_px(inset.1)),
+                y: lane_y,
+                h,
+                moving: false,
+            };
+            match &live {
+                Some((id, mode, start, dur, dy, movable)) if *id == clip.id => {
+                    if *mode == ClipDragMode::Move {
+                        let slot = div()
+                            .absolute()
+                            .left(px(geom.x))
+                            .top(px(area_y))
+                            .w(px((geom.w - 1.).max(2.)))
+                            .h(px(h))
+                            .rounded(px(4.))
+                            .bg(rgba(0xffffff14))
+                            .border_1()
+                            .border_color(rgba(0xffffff2e))
+                            .into_any_element();
+                        let float = ed.clip_el(
+                            clip,
+                            track,
+                            ClipGeom {
+                                x: ed.x_of(*start),
+                                y: area_y + if *movable { *dy } else { 0. },
+                                inset: (0., 0.),
+                                moving: true,
+                                ..geom
+                            },
+                            cx,
+                        );
+                        (None, Some(slot), Some(float))
+                    } else {
+                        let el = ed.clip_el(
+                            clip,
+                            track,
+                            ClipGeom {
+                                x: ed.x_of(*start),
+                                w: to_px(*dur),
+                                ..geom
+                            },
+                            cx,
+                        );
+                        (Some(el), None, None)
+                    }
+                }
+                _ => (Some(ed.clip_el(clip, track, geom, cx)), None, None),
+            }
+        };
+
+        if let Some(track) = &main_track {
+            for clip in &ordered {
+                let inset = seams.get(&clip.id).copied().unwrap_or((0, 0));
+                let (el, slot, float) =
+                    place(self, clip, track, 0., MAIN_TOP, MAIN_LANE_HEIGHT, inset, cx);
+                let selected = self.selected.as_deref() == Some(clip.id.as_str());
+                if let Some(el) = el {
+                    main_clips.push((selected, el));
+                }
+                slots.extend(slot);
+                if float.is_some() {
+                    floating = float;
+                }
+            }
+        }
+        // The selected clip draws over its neighbours (its handles reach out).
+        main_clips.sort_by_key(|(selected, _)| *selected);
+
+        // Transition buttons between main clips (not beside the selected one).
+        let seam_buttons: Vec<AnyElement> = ordered
+            .windows(2)
+            .filter(|pair| {
+                let sel = self.selected.as_deref();
+                sel != Some(pair[0].id.as_str()) && sel != Some(pair[1].id.as_str())
+            })
+            .filter(|_| moving_id.is_none())
+            .map(|pair| {
+                let clip = &pair[0];
+                let end_inset = seams.get(&clip.id).map_or(0, |s| s.1);
+                let x = self.x_of(clip.end() - end_inset);
+                let has = clip.out_transition() > 0;
+                div()
+                    .id(SharedString::from(format!("seam-{}", clip.id)))
+                    .absolute()
+                    .left(px(x - 11.))
+                    .top(px(MAIN_LANE_HEIGHT / 2. - 11.))
+                    .size(px(22.))
+                    .rounded(px(5.))
+                    .bg(theme::text())
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(
+                        if has { Icon::Transition } else { Icon::Shuffle }.el(12., rgb(0x141416)),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    // Transitions live in the browser's Transitions tab.
+                    .on_click(cx.listener(|ed, _, _, cx| {
+                        ed.browser_tab = 5;
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        // ---- the lane stack
+        let mut stack_clips: Vec<(bool, AnyElement)> = vec![];
+        for lane in &stack {
+            for tid in &lane.track_ids {
+                let Some(track) = self.project.tracks.iter().find(|t| &t.id == tid).cloned() else {
+                    continue;
+                };
+                for clip in &track.clips {
+                    let y = lane.clip_top(&clip.id) - scroll_y;
+                    let (el, slot, float) = place(
+                        self,
+                        clip,
+                        &track,
+                        y,
+                        STACK_TOP + y,
+                        lane.row_height,
+                        (0, 0),
+                        cx,
+                    );
+                    let selected = self.selected.as_deref() == Some(clip.id.as_str());
+                    if let Some(el) = el {
+                        stack_clips.push((selected, el));
+                    }
+                    slots.extend(slot);
+                    if float.is_some() {
+                        floating = float;
+                    }
+                }
+            }
+        }
+        stack_clips.sort_by_key(|(selected, _)| *selected);
+
+        // ---- guides over the lanes
+        let mut guides: Vec<AnyElement> = vec![];
+        if let Some(Drag::Clip(d)) = &self.drag {
+            if let Some(t) = d.snapped.filter(|_| d.started) {
+                guides.push(
+                    div()
+                        .absolute()
+                        .left(px(self.x_of(t) - 1.))
+                        .top(px(TOP_PAD))
+                        .bottom_0()
+                        .w(px(2.))
+                        .bg(rgba(0xffffffd9))
+                        .into_any_element(),
+                );
+            }
+            if let Some(t) = d.insert_at.filter(|_| d.started) {
+                guides.push(insert_line(self.x_of(t)));
+            }
+        }
+        match self.media_drop {
+            Some(MediaDrop::Main { at, .. }) => guides.push(insert_line(self.x_of(at))),
+            Some(MediaDrop::Lane { at, length }) => guides.push(
+                div()
+                    .absolute()
+                    .left(px(self.x_of(at)))
+                    .top(px(STACK_TOP))
+                    .w(px(to_px(length).max(8.)))
+                    .h(px(LANE_HEIGHT))
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(theme::text())
+                    .bg(theme::fill_strong())
+                    .into_any_element(),
+            ),
+            None => {}
+        }
+        if let Some(t) = self.hover.filter(|_| self.drag.is_none()) {
+            guides.push(
                 div()
                     .absolute()
                     .left(px(self.x_of(t)))
-                    .top_0()
-                    .h_full()
-                    .border_l_1()
-                    .border_color(theme::chip_border())
-                    .pl_1()
-                    .child(mono(ruler_label(t), theme::XXS, theme::text_tertiary())),
+                    .top(px(TOP_PAD))
+                    .bottom_0()
+                    .w(px(1.))
+                    .bg(rgba(0xffffff8c))
+                    .into_any_element(),
             );
-            s += step;
         }
-
-        let split_tool = self.tool == Tool::Split;
-        let order = lane_order(&self.project.tracks);
-        let mut headers = vec![];
-        let mut lanes = vec![];
-        for (li, track) in order.iter().enumerate() {
-            let main = Some(&track.id) == main_id.as_ref();
-            let height = if main { MAIN_LANE_HEIGHT } else { LANE_HEIGHT };
-            headers.push(self.lane_header(track, main, height, cx).into_any_element());
-
-            let clips = track.clips.iter().map(|clip| {
-                let selected = self.selected.as_deref() == Some(clip.id.as_str());
-                let color = clip_color(&clip.kind);
-                let x = self.x_of(clip.timeline_start);
-                let w = clip.timeline_duration as f32 / SECOND as f32 * self.pps;
-                let id = clip.id.clone();
-                let locked = track.locked;
+        // The stack's scrollbar, while it overflows.
+        if stack_height > window_h {
+            let bar = (window_h * window_h / stack_height).max(24.);
+            let at = scroll_y / (stack_height - window_h) * (window_h - bar);
+            guides.push(
                 div()
-                    .id(SharedString::from(format!("clip-{}", clip.id)))
                     .absolute()
-                    .left(px(x))
-                    .top_0()
-                    .w(px((w - 1.).max(2.)))
-                    .h(px(height))
-                    .rounded(px(5.))
-                    .bg(color)
-                    .border_2()
-                    .border_color(if selected { theme::selected() } else { color })
-                    .overflow_hidden()
-                    .px_1()
-                    .when(clip.hidden || track.hidden, |d| d.opacity(0.4))
-                    .when(split_tool, |d| d.cursor(CursorStyle::Crosshair))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let t = ed.time_at(e.position.x);
-                            if ed.tool == Tool::Split && !locked {
-                                ed.split_clip_at(&id, t, cx);
-                                return;
-                            }
-                            ed.selected = Some(id.clone());
-                            ed.drag = Some(Drag::Scrub);
-                            ed.scrub_to(e.position.x, cx);
-                        }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .h(px(if main { 18. } else { height - 4. }))
-                            .text_size(px(theme::XS))
-                            .text_color(theme::text())
-                            .when(clip.speed != 1., |d| {
-                                d.child(
-                                    div()
-                                        .flex_none()
-                                        .px_1()
-                                        .rounded(px(3.))
-                                        .bg(gpui::rgba(0x00000080))
-                                        .font_family(theme::FONT_MONO)
-                                        .text_size(px(theme::XXS))
-                                        .child(format!("{}×", clip.speed)),
-                                )
-                            })
-                            .child(div().truncate().child(clip.label())),
-                    )
-            });
-            lanes.push(
-                div()
-                    .id(("lane", li))
-                    .relative()
-                    .flex_none()
-                    .h(px(height))
-                    .when(main, |d| d.bg(theme::lane_bg()))
-                    .children(clips)
+                    .right(px(3.))
+                    .top(px(STACK_TOP + at))
+                    .w(px(4.))
+                    .h(px(bar))
+                    .rounded(px(2.))
+                    .bg(theme::fill_strong())
                     .into_any_element(),
             );
         }
@@ -189,9 +702,40 @@ impl Editor {
         let playhead_x = self.x_of(self.playhead);
         let readout = format!(
             "{} / {}",
-            crate::editor::timecode(self.playhead, fps),
-            crate::editor::timecode(self.project.duration, fps)
+            timecode(self.playhead, fps),
+            timecode(self.project.duration, fps)
         );
+
+        // ---- header column
+        let main_header = main_track
+            .as_ref()
+            .map(|t| self.lane_header(&main_lane, std::slice::from_ref(t), cx));
+        let stack_headers: Vec<AnyElement> = stack
+            .iter()
+            .map(|lane| {
+                let tracks: Vec<Track> = self
+                    .project
+                    .tracks
+                    .iter()
+                    .filter(|t| lane.track_ids.contains(&t.id))
+                    .cloned()
+                    .collect();
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(lane.top - scroll_y))
+                    .h(px(lane.height))
+                    .child(self.lane_header(lane, &tracks, cx))
+                    .into_any_element()
+            })
+            .collect();
+
+        let cursor = if split_tool {
+            CursorStyle::Crosshair
+        } else {
+            CursorStyle::Arrow
+        };
 
         div()
             .id("timeline")
@@ -202,25 +746,49 @@ impl Editor {
             .bg(theme::timeline_bg())
             .overflow_hidden()
             .child(
-                // Lane headers, pinned left.
                 div()
+                    .id("lane-headers")
+                    .relative()
                     .flex_none()
                     .w(px(LANE_HEADER_WIDTH))
-                    .flex()
-                    .flex_col()
+                    .h_full()
                     .border_r_1()
                     .border_color(theme::card_border())
                     .bg(theme::panel())
+                    .on_scroll_wheel(
+                        cx.listener(|ed, e: &ScrollWheelEvent, _, cx| ed.on_timeline_wheel(e, cx)),
+                    )
                     .child(
                         div()
-                            .flex_none()
-                            .h(px(RULER_HEIGHT + LANES_TOP))
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(MAIN_TOP))
                             .px_2()
                             .flex()
                             .items_center()
                             .child(mono(readout, theme::XXS, theme::text_secondary())),
                     )
-                    .child(div().flex().flex_col().gap(px(LANE_GAP)).children(headers)),
+                    .children(main_header.map(|h| {
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(MAIN_TOP))
+                            .h(px(MAIN_LANE_HEIGHT))
+                            .child(h)
+                    }))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(STACK_TOP))
+                            .bottom_0()
+                            .overflow_hidden()
+                            .children(stack_headers),
+                    ),
             )
             .child(
                 div()
@@ -229,38 +797,85 @@ impl Editor {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .cursor(if split_tool {
-                        CursorStyle::Crosshair
-                    } else {
-                        CursorStyle::Arrow
-                    })
+                    .cursor(cursor)
                     .child(self.measure("lanes"))
+                    // Empty space and the ruler: deselect and scrub.
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ed, e: &MouseDownEvent, _, cx| {
+                            ed.end_hover();
                             ed.selected = None;
                             ed.drag = Some(Drag::Scrub);
                             ed.scrub_to(e.position.x, cx);
                         }),
                     )
-                    .on_scroll_wheel(cx.listener(|ed, e: &ScrollWheelEvent, _, cx| {
-                        let d = e.delta.pixel_delta(px(20.));
-                        if e.modifiers.platform || e.modifiers.control {
-                            let f = if f32::from(d.y) > 0. { 1.1 } else { 1. / 1.1 };
-                            ed.set_zoom(ed.pps * f, cx);
-                        } else {
-                            let dx = if f32::from(d.x).abs() > f32::from(d.y).abs() {
-                                d.x
-                            } else {
-                                d.y
-                            };
-                            ed.scroll_x = (ed.scroll_x - f32::from(dx)).max(0.);
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|ed, e: &MouseDownEvent, _, cx| {
+                            ed.end_hover();
+                            ed.open_lane_menu(e.position, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|ed, e: &MouseMoveEvent, _, cx| {
+                        if ed.drag.is_none() && e.pressed_button.is_none() {
+                            ed.hover_at(e.position.x, cx);
+                        }
+                    }))
+                    .on_hover(cx.listener(|ed, hovered: &bool, _, cx| {
+                        if !*hovered {
+                            ed.end_hover();
                             cx.notify();
                         }
                     }))
+                    .on_scroll_wheel(
+                        cx.listener(|ed, e: &ScrollWheelEvent, _, cx| ed.on_timeline_wheel(e, cx)),
+                    )
+                    // Library tiles and files from the desktop.
+                    .on_drag_move::<MediaDrag>(cx.listener(
+                        |ed, e: &DragMoveEvent<MediaDrag>, _, cx| {
+                            let item = e.drag(cx).0.clone();
+                            let target = ed.media_drop_at(
+                                e.event.position,
+                                Some(item.duration),
+                                !item.has_video,
+                            );
+                            ed.set_media_drop(target, cx);
+                        },
+                    ))
+                    .on_drag_move::<ExternalPaths>(cx.listener(
+                        |ed, e: &DragMoveEvent<ExternalPaths>, _, cx| {
+                            let target = ed.media_drop_at(e.event.position, None, false);
+                            ed.set_media_drop(target, cx);
+                        },
+                    ))
+                    .on_drop(cx.listener(|ed, drag: &MediaDrag, _, cx| {
+                        if let Some(target) = ed.media_drop {
+                            ed.drop_media(vec![drag.0.clone()], target, cx);
+                        }
+                    }))
+                    .on_drop(cx.listener(|ed, paths: &ExternalPaths, _, cx| {
+                        let Some(target) = ed.media_drop else {
+                            return;
+                        };
+                        let mut items = vec![];
+                        for p in paths.paths() {
+                            let path = p.to_string_lossy().into_owned();
+                            if path.ends_with(".json") {
+                                continue;
+                            }
+                            match decoder::probe(&path) {
+                                Ok(item) => items.push(item),
+                                Err(e) => ed.toast(format!("Can't open {path}: {e}"), cx),
+                            }
+                        }
+                        ed.drop_media(items, target, cx);
+                    }))
                     .child(
                         div()
-                            .relative()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(TOP_PAD))
                             .h(px(RULER_HEIGHT))
                             .border_b_1()
                             .border_color(theme::card_border())
@@ -268,17 +883,32 @@ impl Editor {
                     )
                     .child(
                         div()
-                            .pt(px(LANES_TOP))
-                            .flex()
-                            .flex_col()
-                            .gap(px(LANE_GAP))
-                            .children(lanes),
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(MAIN_TOP))
+                            .h(px(MAIN_LANE_HEIGHT))
+                            .children(main_clips.into_iter().map(|(_, e)| e))
+                            .children(seam_buttons),
                     )
-                    // The playhead: a line with a small head on the ruler.
                     .child(
                         div()
                             .absolute()
-                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .top(px(STACK_TOP))
+                            .bottom_0()
+                            .overflow_hidden()
+                            .children(stack_clips.into_iter().map(|(_, e)| e)),
+                    )
+                    .children(slots)
+                    .children(floating)
+                    .children(guides)
+                    // The playhead: a shield on the ruler over a line.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(TOP_PAD + 2.))
                             .bottom_0()
                             .left(px(playhead_x - 1.))
                             .w(px(2.))
@@ -287,127 +917,616 @@ impl Editor {
                     .child(
                         div()
                             .absolute()
-                            .top_0()
-                            .left(px(playhead_x - 5.))
-                            .w(px(10.))
-                            .h(px(10.))
-                            .rounded_b(px(3.))
+                            .top(px(TOP_PAD + 2.))
+                            .left(px(playhead_x - 5.5))
+                            .w(px(11.))
+                            .h(px(14.))
+                            .rounded_t(px(3.))
+                            .rounded_b(px(5.5))
                             .bg(theme::playhead()),
                     ),
             )
     }
 
+    /// One clip box. `g.y` is relative to whatever holds it.
+    fn clip_el(
+        &self,
+        clip: &Clip,
+        track: &Track,
+        g: ClipGeom,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = clip.id.clone();
+        let selected = self.selected.as_deref() == Some(clip.id.as_str());
+        let locked = track.locked || clip.locked();
+        let hidden = clip.hidden || track.hidden;
+        let box_x = g.x + g.inset.0;
+        let box_w = (g.w - g.inset.0 - g.inset.1 - 1.).max(2.);
+        let picture = matches!(clip.kind.as_str(), "video" | "image");
+        let lanes = self.measured("lanes");
+        let lanes_w = lanes.map_or(2000., |b| f32::from(b.size.width));
+
+        // Contents placed at clip times, so they start `inset.0` left of the box.
+        let shift = -g.inset.0;
+        let mut content = div()
+            .absolute()
+            .inset_0()
+            .rounded(px(4.))
+            .overflow_hidden()
+            .bg(clip_color(&clip.kind))
+            .border_1()
+            .border_color(rgba(0xffffff17));
+
+        match clip.kind.as_str() {
+            "video" => {
+                let (tw, times) = filmstrip(clip, g.w);
+                let src = clip.source.clone().unwrap_or_default();
+                for (i, t) in times.into_iter().enumerate() {
+                    let tx = i as f32 * tw;
+                    if g.x + tx + tw < 0. || g.x + tx > lanes_w {
+                        continue;
+                    }
+                    if let Some(image) = self.tiles.get(&(src.clone(), t)) {
+                        content = content.child(tile(image.clone(), shift + tx, tw));
+                    }
+                }
+                content = content.child(div().absolute().inset_0().bg(rgba(0x00000038)));
+            }
+            "image" | "sticker" => {
+                if let Some(image) = clip.source.as_ref().and_then(|s| self.thumbs.get(s)) {
+                    if clip.kind == "sticker" {
+                        let side = (g.h - 12.).max(12.);
+                        content = content.child(
+                            div()
+                                .absolute()
+                                .left(px(6.))
+                                .top(px(6.))
+                                .size(px(side))
+                                .overflow_hidden()
+                                .child(
+                                    img(image.clone())
+                                        .absolute()
+                                        .inset_0()
+                                        .size_full()
+                                        .object_fit(ObjectFit::Contain),
+                                ),
+                        );
+                    } else {
+                        let count = ((g.w / TILE_WIDTH).round() as usize).clamp(1, MAX_TILES);
+                        let tw = g.w / count as f32;
+                        for i in 0..count {
+                            let tx = i as f32 * tw;
+                            if g.x + tx + tw < 0. || g.x + tx > lanes_w {
+                                continue;
+                            }
+                            content = content.child(tile(image.clone(), shift + tx, tw));
+                        }
+                        content = content.child(div().absolute().inset_0().bg(rgba(0x00000038)));
+                    }
+                }
+            }
+            "audio" => {
+                if let Some(wave) = self.waveform(clip, g.w, shift, lanes) {
+                    content = content.child(wave);
+                }
+            }
+            _ => {}
+        }
+
+        if picture {
+            if box_w > 40. {
+                content = content.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(NAME_STRIP))
+                        .px(px(6.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .bg(rgba(0x00000059))
+                        .text_size(px(theme::XS))
+                        .text_color(theme::text())
+                        .when(clip.speed != 1., |d| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .px(px(3.))
+                                    .rounded(px(3.))
+                                    .bg(rgba(0x00000080))
+                                    .child(mono(
+                                        format!("{}×", clip.speed),
+                                        theme::XXS,
+                                        theme::text(),
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(px((box_w - 90.).max(20.)))
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(clip.label()),
+                        )
+                        .child(mono(
+                            timecode(clip.timeline_duration, self.fps()),
+                            theme::XXS,
+                            rgba(0xffffffb8),
+                        )),
+                );
+            }
+        } else if clip.kind != "sticker" {
+            let audio = clip.kind == "audio";
+            content = content.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .px(px(7.))
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .max_w_full()
+                            .truncate()
+                            .text_size(px(theme::SM))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .when(audio, |d| d.px(px(4.)).rounded(px(3.)).bg(rgba(0x14202a8c)))
+                            .child(clip.label()),
+                    ),
+            );
+        }
+
+        let muted =
+            matches!(clip.kind.as_str(), "video" | "audio") && (clip.muted() || track.muted);
+        let badge = || {
+            div()
+                .absolute()
+                .p(px(2.))
+                .rounded(px(3.))
+                .bg(rgba(0x0000008c))
+        };
+        let handles = selected && !locked && !g.moving;
+        let handle = |side: Side, cx: &mut Context<Self>| {
+            let id = id.clone();
+            div()
+                .id(SharedString::from(format!(
+                    "trim-{}-{}",
+                    if side == Side::Start { "l" } else { "r" },
+                    id
+                )))
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(px(10.))
+                .map(|d| match side {
+                    Side::Start => d.left(px(-2.)).rounded_l(px(4.)),
+                    Side::End => d.right(px(-2.)).rounded_r(px(4.)),
+                })
+                .bg(theme::text())
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor(CursorStyle::ResizeLeftRight)
+                .child(
+                    div()
+                        .w(px(2.))
+                        .h(px(16f32.min(g.h - 8.).max(4.)))
+                        .rounded(px(2.))
+                        .bg(rgba(0x1a160880)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        ed.start_clip_drag(&id, ClipDragMode::Trim(side), e.position, cx);
+                    }),
+                )
+        };
+        let (down_id, menu_id) = (id.clone(), id.clone());
+
+        div()
+            .id(SharedString::from(format!("clip-{id}")))
+            .absolute()
+            .left(px(box_x))
+            .top(px(g.y))
+            .w(px(box_w))
+            .h(px(g.h))
+            .group("clip")
+            .when(hidden, |d| d.opacity(0.35))
+            .when(g.moving, |d| d.opacity(0.72))
+            .when(!locked && self.tool == Tool::Select, |d| d.cursor_pointer())
+            .when(self.tool == Tool::Split && !locked, |d| {
+                d.cursor(CursorStyle::Crosshair)
+            })
+            .child(content)
+            .child(div().absolute().inset_0().rounded(px(4.)).map(|d| {
+                if selected || g.moving {
+                    d.border_2().border_color(theme::selected())
+                } else {
+                    d.border_1()
+                        .border_color(gpui::transparent_black())
+                        .group_hover("clip", |s| s.border_color(rgba(0xffffffb3)))
+                }
+            }))
+            .when(locked, |d| {
+                d.child(
+                    badge()
+                        .right(px(4.))
+                        .top(px(3.))
+                        .child(Icon::LockClosed.el(10., theme::text())),
+                )
+            })
+            .when(muted, |d| {
+                d.child(
+                    badge()
+                        .left(px(4.))
+                        .bottom(px(3.))
+                        .child(Icon::VolumeMute.el(10., theme::text())),
+                )
+            })
+            .when(handles, |d| {
+                d.child(handle(Side::Start, cx))
+                    .child(handle(Side::End, cx))
+            })
+            // A locked clip isn't a timeline item: presses fall through to
+            // the lane (seek, the lane menu), as on empty space.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
+                    if locked {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    ed.end_hover();
+                    if ed.tool == Tool::Split {
+                        let t = ed.time_at(e.position.x);
+                        ed.split_clip_at(&down_id, t, cx);
+                        return;
+                    }
+                    ed.selected = Some(down_id.clone());
+                    ed.start_clip_drag(&down_id, ClipDragMode::Move, e.position, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
+                    if locked {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    ed.end_hover();
+                    ed.selected = Some(menu_id.clone());
+                    ed.open_clip_menu(&menu_id, e.position, cx);
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// An audio clip's waveform: one bar per `WAVE_STEP` px, the loudest
+    /// peak in the stretch of sound it covers, scaled by the clip volume.
+    fn waveform(
+        &self,
+        clip: &Clip,
+        width: f32,
+        shift: f32,
+        lanes: Option<Bounds<Pixels>>,
+    ) -> Option<impl IntoElement + use<>> {
+        let wave: Arc<Waveform> = self.waves.get(clip.source.as_ref()?)?.clone()?;
+        let pps = self.pps;
+        let speed = if clip.speed > 0. { clip.speed } else { 1. };
+        let source_start = clip.source_start.unwrap_or(0) as f64;
+        let gain = if clip.muted() {
+            0.
+        } else {
+            clip.volume() as f32
+        };
+        let color = theme::clip_audio_wave();
+        Some(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let left = f32::from(bounds.origin.x) + shift;
+                    let mid = f32::from(bounds.center().y);
+                    let half = (f32::from(bounds.size.height) / 2. - 3.).max(0.75);
+                    let (lo, hi) = lanes.map_or((f32::MIN, f32::MAX), |b| {
+                        (f32::from(b.origin.x), f32::from(b.origin.x + b.size.width))
+                    });
+                    let per_px = SECOND as f64 / pps as f64;
+                    let peak_at =
+                        |t: f64| (source_start + t * speed) * wave.per_second / SECOND as f64;
+                    let columns = (width / WAVE_STEP).ceil() as usize;
+                    for i in 0..columns {
+                        let x0 = i as f32 * WAVE_STEP;
+                        let wx = left + x0;
+                        if wx + WAVE_STEP < lo || wx > hi {
+                            continue;
+                        }
+                        let first = peak_at(x0 as f64 * per_px).floor().max(0.) as usize;
+                        let last = (peak_at((x0 + WAVE_STEP) as f64 * per_px).ceil() as usize)
+                            .saturating_sub(1)
+                            .max(first);
+                        let peak = wave
+                            .peaks
+                            .get(first..=last.min(wave.peaks.len().saturating_sub(1)))
+                            .map_or(0., |s| s.iter().copied().fold(0., f32::max));
+                        let a = ((peak * gain).min(1.) * half).max(0.75);
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(px(wx), px(mid - a)),
+                                size(px(WAVE_STEP), px(a * 2.)),
+                            ),
+                            color,
+                        ));
+                    }
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+    }
+
+    /// A lane's track header: its icon, then lock / eye / speaker / "…".
     fn lane_header(
         &self,
-        track: &Track,
-        main: bool,
-        height: f32,
+        lane: &LaneLayout,
+        tracks: &[Track],
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let id = track.id.clone();
-        let toggle =
-            |flag: LaneFlag, on: bool, icon: crate::ui::icons::Icon, label: &'static str| {
-                let id = id.clone();
-                icon_button(SharedString::from(format!("{label}-{id}")), icon, label)
-                    .size(14.)
-                    .active(on)
-                    .on_click(cx.listener(move |ed, _, _, cx| ed.toggle_lane_flag(&id, flag, cx)))
-            };
+    ) -> impl IntoElement + use<> {
+        let all = |f: fn(&Track) -> bool| !tracks.is_empty() && tracks.iter().all(f);
+        let locked = all(|t| t.locked);
+        let hidden = all(|t| t.hidden);
+        let muted = all(|t| t.muted);
+        let ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+        let key = ids.first().cloned().unwrap_or_default();
+        let toggle = |flag: LaneFlag, on: bool, icon: Icon, label: &'static str| {
+            let ids = ids.clone();
+            icon_button(SharedString::from(format!("{label}-{key}")), icon, label)
+                .size(15.)
+                .lit(on)
+                .on_click(
+                    cx.listener(move |ed, _, _, cx| ed.toggle_lanes_flag(ids.clone(), flag, cx)),
+                )
+        };
+        let more_ids = ids.clone();
         div()
-            .flex_none()
-            .h(px(height))
-            .px_2()
+            .size_full()
+            .pl_2()
+            .pr_1()
             .flex()
             .items_center()
-            .gap(px(2.))
+            .gap(px(1.))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(px(theme::XS))
-                    .text_color(theme::text_tertiary())
-                    .when(main, |d| d.font_weight(FontWeight::SEMIBOLD))
-                    .child(track.name.clone()),
+                    .flex()
+                    .items_center()
+                    .child(lane.kind.icon().el(16., theme::text_tertiary()))
+                    .id(SharedString::from(format!("lane-icon-{key}")))
+                    .tooltip(crate::ui::widgets::tooltip(lane.kind.name(), None)),
             )
             .child(toggle(
                 LaneFlag::Locked,
-                track.locked,
-                if track.locked {
+                locked,
+                if locked {
                     Icon::LockClosed
                 } else {
                     Icon::LockOpen
                 },
-                if track.locked {
-                    "Unlock lane"
-                } else {
-                    "Lock lane"
-                },
+                if locked { "Unlock track" } else { "Lock track" },
             ))
-            .when(track.kind != TrackType::Audio, |d| {
+            .child(toggle(
+                LaneFlag::Hidden,
+                hidden,
+                if hidden { Icon::EyeOff } else { Icon::Eye },
+                if hidden { "Show track" } else { "Hide track" },
+            ))
+            .when(lane.kind.has_sound(), |d| {
                 d.child(toggle(
-                    LaneFlag::Hidden,
-                    !track.hidden,
-                    if track.hidden {
-                        Icon::EyeOff
+                    LaneFlag::Muted,
+                    muted,
+                    if muted {
+                        Icon::VolumeMute
                     } else {
-                        Icon::Eye
+                        Icon::VolumeHigh
                     },
-                    if track.hidden {
-                        "Show lane"
-                    } else {
-                        "Hide lane"
-                    },
+                    if muted { "Unmute track" } else { "Mute track" },
                 ))
             })
-            .when(
-                matches!(
-                    track.kind,
-                    TrackType::Video | TrackType::Audio | TrackType::Overlay
-                ),
-                |d| {
-                    d.child(toggle(
-                        LaneFlag::Muted,
-                        !track.muted,
-                        if track.muted {
-                            Icon::VolumeMute
-                        } else {
-                            Icon::VolumeHigh
-                        },
-                        if track.muted {
-                            "Unmute lane"
-                        } else {
-                            "Mute lane"
-                        },
-                    ))
-                },
+            .child(
+                div()
+                    .id(SharedString::from(format!("lane-more-{key}")))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ed.open_lane_options(more_ids.clone(), e.position, cx);
+                        }),
+                    )
+                    .child(
+                        icon_button(
+                            SharedString::from(format!("more-{key}")),
+                            Icon::Ellipsis,
+                            "More",
+                        )
+                        .size(15.),
+                    ),
             )
     }
 
-    pub fn toggle_lane_flag(&mut self, track_id: &str, flag: LaneFlag, cx: &mut Context<Self>) {
-        let id = track_id.to_string();
+    /// A header switch over all of a lane's tracks: on for all when any is
+    /// off, else off. One undo step; locking drops the lane's clip from the
+    /// selection.
+    pub fn toggle_lanes_flag(
+        &mut self,
+        track_ids: Vec<String>,
+        flag: LaneFlag,
+        cx: &mut Context<Self>,
+    ) {
+        let get = |t: &Track| match flag {
+            LaneFlag::Locked => t.locked,
+            LaneFlag::Hidden => t.hidden,
+            LaneFlag::Muted => t.muted,
+        };
+        let tracks: Vec<&Track> = self
+            .project
+            .tracks
+            .iter()
+            .filter(|t| track_ids.contains(&t.id))
+            .collect();
+        if tracks.is_empty() {
+            return;
+        }
+        let on = !tracks.iter().all(|t| get(t));
+        if flag == LaneFlag::Locked
+            && on
+            && let Some(sel) = &self.selected
+            && tracks.iter().any(|t| t.clips.iter().any(|c| &c.id == sel))
+        {
+            self.selected = None;
+        }
         let label = match flag {
-            LaneFlag::Locked => "Lock Lane",
-            LaneFlag::Hidden => "Hide Lane",
-            LaneFlag::Muted => "Mute Lane",
+            LaneFlag::Locked => "Lock Track",
+            LaneFlag::Hidden => "Hide Track",
+            LaneFlag::Muted => "Mute Track",
         };
         self.edit(
             label,
             false,
             None,
             |p| {
-                let Some(t) = p.tracks.iter_mut().find(|t| t.id == id) else {
-                    return false;
-                };
-                let f = match flag {
-                    LaneFlag::Locked => &mut t.locked,
-                    LaneFlag::Hidden => &mut t.hidden,
-                    LaneFlag::Muted => &mut t.muted,
-                };
-                *f = !*f;
+                for t in p.tracks.iter_mut().filter(|t| track_ids.contains(&t.id)) {
+                    *match flag {
+                        LaneFlag::Locked => &mut t.locked,
+                        LaneFlag::Hidden => &mut t.hidden,
+                        LaneFlag::Muted => &mut t.muted,
+                    } = on;
+                }
                 true
             },
             cx,
         );
+    }
+}
+
+/// One filmstrip tile at clip-box x `x`, `w` wide.
+fn tile(image: Arc<gpui::RenderImage>, x: f32, w: f32) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(px(x))
+        .top_0()
+        .bottom_0()
+        .w(px(w + 0.5))
+        .overflow_hidden()
+        .child(
+            img(image)
+                .absolute()
+                .inset_0()
+                .size_full()
+                .object_fit(ObjectFit::Cover),
+        )
+}
+
+/// The white insert line at a main-lane cut.
+fn insert_line(x: f32) -> AnyElement {
+    div()
+        .absolute()
+        .left(px(x - 1.))
+        .top(px(MAIN_TOP - 4.))
+        .h(px(MAIN_LANE_HEIGHT + 8.))
+        .w(px(2.))
+        .rounded(px(1.))
+        .bg(theme::text())
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{MediaItem, Project};
+
+    fn clip(id: &str, start: i64, dur: i64) -> Clip {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "kind": "text", "timelineStart": start * SECOND,
+            "timelineDuration": dur * SECOND
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn overlapping_clips_get_sub_rows() {
+        let clips = [
+            clip("a", 0, 4),
+            clip("b", 2, 4),
+            clip("c", 4, 2),
+            clip("d", 3, 1),
+        ];
+        let (rows, count) = assign_rows(clips.iter());
+        assert_eq!(count, 3);
+        assert_eq!(rows["a"], 0);
+        assert_eq!(rows["b"], 1);
+        assert_eq!(rows["d"], 2);
+        assert_eq!(rows["c"], 0, "a has ended by 4 s");
+    }
+
+    #[test]
+    fn stack_shows_only_lanes_with_clips() {
+        let mut p = Project::empty();
+        let (_, stack, h) = lane_layouts(&p);
+        assert!(stack.is_empty());
+        assert_eq!(h, 0.);
+        let sound = MediaItem {
+            path: "/tmp/a.m4a".into(),
+            name: "a.m4a".into(),
+            duration: 2 * SECOND,
+            width: 0,
+            height: 0,
+            has_video: false,
+            still: false,
+        };
+        p.insert_media_at(&sound, 0);
+        p.insert_media_at(&sound, SECOND);
+        let (_, stack, h) = lane_layouts(&p);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].kind, LaneKind::Audio);
+        assert_eq!(stack[0].height, LANE_HEIGHT * 2. + LANE_GAP);
+        assert_eq!(h, stack[0].height + LANE_GAP);
+    }
+
+    #[test]
+    fn filmstrip_frames_snap_to_a_grid_inside_the_segment() {
+        let mut c = clip("v", 0, 10);
+        c.kind = "video".into();
+        c.source_start = Some(2 * SECOND);
+        let (tw, times) = filmstrip(&c, 440.);
+        assert_eq!(times.len(), 10);
+        assert!((tw - 44.).abs() < 0.01);
+        // On the 1 s grid, except the last one, kept off the segment's end.
+        assert!(times[..9].iter().all(|t| t % 1_000_000 == 0));
+        assert_eq!(times[9], 12 * SECOND - SEGMENT_END_GUARD);
+        assert!(times[0] >= 2 * SECOND && *times.last().unwrap() < 12 * SECOND);
+    }
+
+    #[test]
+    fn seams_split_a_transition_overlap() {
+        let mut a = clip("a", 0, 4);
+        a.extra.insert(
+            "outTransition".into(),
+            serde_json::json!({ "durationMicros": SECOND }),
+        );
+        let b = clip("b", 3, 4);
+        let seams = transition_seams(&[&a, &b]);
+        assert_eq!(seams["a"], (0, SECOND / 2));
+        assert_eq!(seams["b"], (SECOND / 2, 0));
+    }
+
+    #[test]
+    fn ruler_labels() {
+        assert_eq!(ruler_label(2.), "00:02");
+        assert_eq!(ruler_label(61.5), "01:01.5");
     }
 }

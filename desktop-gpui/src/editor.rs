@@ -4,7 +4,7 @@
 //! each panel renders from `src/ui/*`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use gpui::{
     Size, Window, actions, canvas, div, prelude::*, px,
 };
 
-use crate::decoder::{self, DecodedFrame, FrameServer};
+use crate::decoder::{self, DecodedFrame, FrameServer, TileServer, Waveform};
 use crate::engine::Engine;
 use crate::history::History;
 use crate::model::{self, Clip, MediaItem, Micros, Project, SECOND, Side, TrackType};
@@ -24,6 +24,7 @@ use crate::prefs::Prefs;
 use crate::projects;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
+use crate::ui::timeline_edit::{ClipDrag, MediaDrop};
 
 actions!(
     editor,
@@ -32,6 +33,8 @@ actions!(
 
 /// Preview frames are decoded at most this wide (the player is ~800 px).
 const PREVIEW_MAX_WIDTH: u32 = 1280;
+/// Filmstrip tiles are decoded this wide (a 44 px tile at 2×, some slack).
+const TILE_MAX_WIDTH: u32 = 128;
 
 // Layout (old editor's desktop layout).
 pub const HEADER_HEIGHT: f32 = 40.;
@@ -104,6 +107,8 @@ pub enum Drag {
         key: &'static str,
         apply: SliderFn,
     },
+    /// A timeline clip moved or trimmed (`ui/timeline_edit.rs`).
+    Clip(Box<ClipDrag>),
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -116,10 +121,61 @@ pub struct ClipboardEntry {
 
 pub type PopupAction = Rc<dyn Fn(&mut Editor, &mut Window, &mut Context<Editor>)>;
 
+/// A popup menu row: a label with an optional tick (toggles), a shortcut
+/// hint on the right, or a separator line.
 pub struct PopupItem {
     pub label: SharedString,
     pub checked: bool,
+    pub hint: Option<SharedString>,
+    pub disabled: bool,
+    /// Drawn in the danger colour (Delete).
+    pub destructive: bool,
+    pub separator: bool,
     pub run: PopupAction,
+}
+
+impl PopupItem {
+    pub fn new(
+        label: impl Into<SharedString>,
+        run: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
+    ) -> Self {
+        PopupItem {
+            label: label.into(),
+            checked: false,
+            hint: None,
+            disabled: false,
+            destructive: false,
+            separator: false,
+            run: Rc::new(run),
+        }
+    }
+
+    pub fn separator() -> Self {
+        PopupItem {
+            separator: true,
+            ..PopupItem::new("", |_, _, _| {})
+        }
+    }
+
+    pub fn checked(mut self, on: bool) -> Self {
+        self.checked = on;
+        self
+    }
+
+    pub fn hint(mut self, id: Shortcut) -> Self {
+        self.hint = Some(shortcuts::hint(id).into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
+        self
+    }
 }
 
 /// The projects list, or a project open in the editor.
@@ -188,6 +244,23 @@ pub struct Editor {
     /// Where measured elements sit in the window, by name.
     pub(crate) bounds: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
 
+    /// The lane stack's vertical scroll (px).
+    pub(crate) lane_scroll_y: f32,
+    /// The time under the pointer over the lanes (the hover line; with the
+    /// preview axis on, the frame the player shows).
+    pub(crate) hover: Option<Micros>,
+    /// Where something dragged over the timeline would land.
+    pub(crate) media_drop: Option<MediaDrop>,
+    /// The pointer's last window position (edge auto-scroll).
+    pub(crate) pointer: Point<Pixels>,
+    pub(crate) edge_scroll_at: Option<Instant>,
+    /// Filmstrip tiles by (file, source time), and the ones asked for.
+    pub(crate) tiles: HashMap<(String, Micros), Arc<RenderImage>>,
+    pub(crate) tiles_pending: HashSet<(String, Micros)>,
+    pub(crate) tile_server: TileServer,
+    /// Waveform peaks by file (None while decoding, or when it has no sound).
+    pub(crate) waves: HashMap<String, Option<Arc<Waveform>>>,
+
     servers: HashMap<String, FrameServer>,
     frame_tx: async_channel::Sender<DecodedFrame>,
     wanted: Option<(String, Micros)>,
@@ -206,6 +279,16 @@ impl Editor {
         cx.spawn(async move |this, cx| {
             while let Ok(frame) = frame_rx.recv().await {
                 if this.update(cx, |ed, cx| ed.on_frame(frame, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let (tile_tx, tile_rx) = async_channel::unbounded::<DecodedFrame>();
+        cx.spawn(async move |this, cx| {
+            while let Ok(tile) = tile_rx.recv().await {
+                if this.update(cx, |ed, cx| ed.on_tile(tile, cx)).is_err() {
                     break;
                 }
             }
@@ -250,6 +333,15 @@ impl Editor {
             thumbs: HashMap::new(),
             inspector_entry: None,
             bounds: Rc::default(),
+            lane_scroll_y: 0.,
+            hover: None,
+            media_drop: None,
+            pointer: Point::default(),
+            edge_scroll_at: None,
+            tiles: HashMap::new(),
+            tiles_pending: HashSet::new(),
+            tile_server: TileServer::spawn(TILE_MAX_WIDTH, tile_tx),
+            waves: HashMap::new(),
             servers: HashMap::new(),
             frame_tx,
             wanted: None,
@@ -415,7 +507,7 @@ impl Editor {
         .detach();
     }
 
-    fn add_to_library(&mut self, item: MediaItem, cx: &mut Context<Self>) {
+    pub(crate) fn add_to_library(&mut self, item: MediaItem, cx: &mut Context<Self>) {
         if self.media.iter().any(|m| m.path == item.path) {
             return;
         }
@@ -488,6 +580,11 @@ impl Editor {
         self.fullscreen = false;
         self.playhead = 0;
         self.scroll_x = 0.;
+        self.lane_scroll_y = 0.;
+        self.hover = None;
+        self.drag = None;
+        self.tiles.clear();
+        self.tiles_pending.clear();
         self.screen = Screen::Editor;
         self.commit(cx);
     }
@@ -780,7 +877,10 @@ impl Editor {
             Shortcut::Undo => self.undo(cx),
             Shortcut::Redo => self.redo(cx),
             Shortcut::Deselect => {
-                if self.fullscreen {
+                if matches!(self.drag, Some(Drag::Clip(_))) {
+                    // Esc mid drag: the clip goes back where it was.
+                    self.drag = None;
+                } else if self.fullscreen {
                     self.fullscreen = false;
                 } else if self.tool == Tool::Split {
                     self.tool = Tool::Select;
@@ -789,8 +889,8 @@ impl Editor {
                 }
                 cx.notify();
             }
-            Shortcut::ZoomIn => self.set_zoom(self.pps * ZOOM_STEP, cx),
-            Shortcut::ZoomOut => self.set_zoom(self.pps / ZOOM_STEP, cx),
+            Shortcut::ZoomIn => self.zoom_step(ZOOM_STEP, cx),
+            Shortcut::ZoomOut => self.zoom_step(1. / ZOOM_STEP, cx),
             Shortcut::ZoomFit => self.zoom_to_fit(cx),
             Shortcut::PreviewAxis => {
                 self.prefs.preview_axis = !self.prefs.preview_axis;
@@ -1158,10 +1258,10 @@ impl Editor {
     }
 
     /// Asks the decoder of the top visible clip for the frame at the playhead.
-    fn request_preview(&mut self) {
+    pub(crate) fn request_preview(&mut self) {
         let top = self
             .engine
-            .active_layers(self.playhead)
+            .active_layers(self.preview_time())
             .into_iter()
             .rfind(|l| l.is_visual && !l.source.is_empty());
         let Some(layer) = top else {
@@ -1184,6 +1284,30 @@ impl Editor {
         });
         server.request(layer.source_time);
         self.wanted = Some((layer.source, layer.source_time));
+    }
+
+    /// What the player shows: the hovered time while the preview axis is
+    /// on (and nothing plays or drags), else the playhead.
+    pub fn preview_time(&self) -> Micros {
+        match self.hover {
+            Some(t)
+                if self.prefs.preview_axis && self.drag.is_none() && !self.engine.is_playing() =>
+            {
+                t
+            }
+            _ => self.playhead,
+        }
+    }
+
+    fn on_tile(&mut self, f: DecodedFrame, cx: &mut Context<Self>) {
+        let key = (f.source, f.pts);
+        self.tiles_pending.remove(&key);
+        let Some(buffer) = image::RgbaImage::from_raw(f.width, f.height, f.bgra) else {
+            return;
+        };
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+        self.tiles.insert(key, image);
+        cx.notify();
     }
 
     fn on_frame(&mut self, f: DecodedFrame, cx: &mut Context<Self>) {
@@ -1211,8 +1335,22 @@ impl Editor {
     // ---- timeline view ----------------------------------------------------
 
     pub fn set_zoom(&mut self, pps: f32, cx: &mut Context<Self>) {
-        self.pps = pps.clamp(MIN_PPS, MAX_PPS);
-        cx.notify();
+        let x = self.zoom_anchor();
+        self.zoom_at(pps, x, cx);
+    }
+
+    /// ⌘= / ⌘-: zooms around the playhead while it's in view.
+    fn zoom_step(&mut self, factor: f32, cx: &mut Context<Self>) {
+        self.set_zoom(self.pps * factor, cx);
+    }
+
+    /// Where a toolbar zoom pivots: the playhead if in view, else the left.
+    fn zoom_anchor(&self) -> f32 {
+        let width = self
+            .measured("lanes")
+            .map_or(800., |b| f32::from(b.size.width));
+        let x = self.x_of(self.playhead);
+        if (0. ..=width).contains(&x) { x } else { 0. }
     }
 
     /// ⇧Z: the whole project fits the lane area, scrolled to the start.
@@ -1221,8 +1359,10 @@ impl Editor {
             .measured("lanes")
             .map_or(800., |b| f32::from(b.size.width));
         let secs = (self.project.duration as f32 / SECOND as f32).max(1.);
+        // Room kept right of the end, as the old editor's fit.
+        self.pps = ((width - 80.).max(100.) / secs).clamp(MIN_PPS, MAX_PPS);
         self.scroll_x = 0.;
-        self.set_zoom(width * 0.92 / secs, cx);
+        cx.notify();
     }
 
     pub fn scrub_to(&mut self, window_x: Pixels, cx: &mut Context<Self>) {
@@ -1384,6 +1524,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pointer = e.position;
         let Some(drag) = &self.drag else {
             return;
         };
@@ -1403,6 +1544,7 @@ impl Editor {
                 cx.notify();
             }
             Drag::Scrub => self.scrub_to(e.position.x, cx),
+            Drag::Clip(_) => self.update_clip_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Slider { key, apply } => {
                 let (key, apply) = (*key, apply.clone());
@@ -1451,6 +1593,7 @@ impl Editor {
                 }
                 self.live_value = None;
             }
+            Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             _ => {}
         }
         cx.notify();
@@ -1466,6 +1609,11 @@ impl Render for Editor {
             self.playhead = self.engine.tick();
             self.request_preview();
             window.request_animation_frame();
+        }
+        self.tick_edge_scroll(window, cx);
+        // A drag over the timeline that ended elsewhere leaves no ghost.
+        if self.media_drop.is_some() && !cx.has_active_drag() {
+            self.media_drop = None;
         }
 
         let sizes = self.panel_sizes(window.viewport_size());
@@ -1574,6 +1722,7 @@ impl Render for Editor {
                     .child(self.render_player(cx)),
             );
         } else {
+            let timeline = self.render_timeline(cx).into_any_element();
             root = root
                 .child(self.render_header(window, cx))
                 .child(
@@ -1606,7 +1755,7 @@ impl Render for Editor {
                         .mx(px(GUTTER))
                         .mb(px(GUTTER))
                         .child(self.render_toolbar(cx))
-                        .child(self.render_timeline(cx)),
+                        .child(timeline),
                 );
         }
         root.children(self.render_overlays(window.viewport_size(), cx))

@@ -9,5 +9,6 @@ pub mod icons;
 pub mod inspector;
 pub mod player;
 pub mod timeline;
+pub mod timeline_edit;
 pub mod toolbar;
 pub mod widgets;

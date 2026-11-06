@@ -2,8 +2,6 @@
 //! on near-black), and the transport bar under it: timecode | go to start,
 //! previous frame, play, next frame, go to end | ratio, full screen.
 
-use std::rc::Rc;
-
 use gpui::{AnyElement, Context, FontWeight, ObjectFit, Rgba, div, img, prelude::*, px, rgb};
 
 use crate::editor::{Editor, PopupItem, timecode};
@@ -255,10 +253,11 @@ impl Editor {
         let current = aspect_label(self.project.canvas.width, self.project.canvas.height);
         let items = ASPECT_PRESETS
             .iter()
-            .map(|&(label, ratio)| PopupItem {
-                label: label.into(),
-                checked: label == current,
-                run: Rc::new(move |ed: &mut Editor, _, cx| ed.set_canvas_ratio(ratio, cx)),
+            .map(|&(label, ratio)| {
+                PopupItem::new(label, move |ed: &mut Editor, _, cx| {
+                    ed.set_canvas_ratio(ratio, cx)
+                })
+                .checked(label == current)
             })
             .collect();
         self.open_popup(at, items, cx);

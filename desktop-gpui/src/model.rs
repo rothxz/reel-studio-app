@@ -53,7 +53,9 @@ pub struct Track {
     pub kind: TrackType,
     pub name: String,
     pub clips: Vec<Clip>,
-    pub order: i32,
+    /// Stacking order (higher draws on top). The app can store halves
+    /// (a lane slotted between two others), so it isn't an integer.
+    pub order: f64,
     pub muted: bool,
     pub hidden: bool,
     pub locked: bool,
@@ -114,6 +116,24 @@ impl Clip {
         self.flag("reversed")
     }
 
+    /// Locked on its own (the lane's lock is on the track).
+    pub fn locked(&self) -> bool {
+        self.flag("locked")
+    }
+
+    /// "Mute clip audio" (video and audio clips).
+    pub fn muted(&self) -> bool {
+        self.flag("muted")
+    }
+
+    /// Clip volume, 1 = as recorded.
+    pub fn volume(&self) -> f64 {
+        self.extra
+            .get("volume")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.)
+    }
+
     /// How long the transition into the next main clip overlaps it.
     pub fn out_transition(&self) -> Micros {
         self.extra
@@ -157,6 +177,43 @@ impl Clip {
             .and_then(|s| s.rsplit('/').next())
             .map(str::to_owned)
             .unwrap_or_else(|| self.kind.clone())
+    }
+}
+
+/// Overlay video lanes are `overlay` tracks with ids under this prefix (the
+/// app's convention; other `overlay` tracks hold stickers).
+pub fn overlay_video_prefix(project_id: &str) -> String {
+    format!("{project_id}-overlay-video-")
+}
+
+impl Track {
+    /// A lane of pictures over the main one (picture in picture).
+    pub fn is_overlay_video(&self, project_id: &str) -> bool {
+        self.kind == TrackType::Overlay && self.id.starts_with(&overlay_video_prefix(project_id))
+    }
+
+    /// Clear of every clip over [start, end).
+    fn free_over(&self, start: Micros, end: Micros) -> bool {
+        self.clips
+            .iter()
+            .all(|c| c.timeline_start >= end || c.end() <= start)
+    }
+}
+
+/// The cut nearest `time` among `clips` (in order, packed): 0 = before the
+/// first, `clips.len()` = after the last. Where a clip dragged onto the main
+/// lane goes in (the pointer's nearest cut, not its middle).
+pub fn nearest_seam_index(clips: &[&Clip], time: Micros) -> usize {
+    (0..=clips.len())
+        .min_by_key(|&i| (seam_at(clips, i) - time).abs())
+        .unwrap_or(0)
+}
+
+/// Where cut `index` among `clips` (in order) sits on the timeline now.
+pub fn seam_at(clips: &[&Clip], index: usize) -> Micros {
+    match clips.get(index) {
+        Some(c) => c.timeline_start,
+        None => clips.last().map_or(0, |c| c.end()),
     }
 }
 
@@ -213,7 +270,7 @@ impl Project {
                     kind: TrackType::Video,
                     name: "Main".into(),
                     clips: vec![],
-                    order: 0,
+                    order: 0.,
                     muted: false,
                     hidden: false,
                     locked: false,
@@ -223,7 +280,7 @@ impl Project {
                     kind: TrackType::Audio,
                     name: "Audio".into(),
                     clips: vec![],
-                    order: 1,
+                    order: 1.,
                     muted: false,
                     hidden: false,
                     locked: false,
@@ -528,6 +585,266 @@ impl Project {
         }
     }
 
+    /// Moves a clip onto `to_track` (its own or another) at `start`. False
+    /// when the clip or the lane isn't there, or nothing changes.
+    pub fn move_clip(&mut self, clip_id: &str, to_track: &str, start: Micros) -> bool {
+        let start = start.max(0);
+        let Some(to) = self.tracks.iter().position(|t| t.id == to_track) else {
+            return false;
+        };
+        let Some((from, i)) = self.tracks.iter().enumerate().find_map(|(ti, t)| {
+            t.clips
+                .iter()
+                .position(|c| c.id == clip_id)
+                .map(|ci| (ti, ci))
+        }) else {
+            return false;
+        };
+        if from == to && self.tracks[from].clips[i].timeline_start == start {
+            return false;
+        }
+        let mut clip = self.tracks[from].clips.remove(i);
+        clip.timeline_start = start;
+        if from == to {
+            self.tracks[to].clips.insert(i, clip);
+        } else {
+            self.tracks[to].clips.push(clip);
+        }
+        self.recompute_duration();
+        true
+    }
+
+    /// A trim handle's drag: the clip's `side` edge moves so it lasts
+    /// `duration`, the other edge staying put; the source window follows
+    /// (`Clip::trim_source`).
+    pub fn trim_edge(&mut self, clip_id: &str, side: Side, duration: Micros) -> bool {
+        let Some(clip) = self.clip_mut(clip_id) else {
+            return false;
+        };
+        if duration <= 0 || duration == clip.timeline_duration {
+            return false;
+        }
+        let end = clip.end();
+        clip.trim_source(duration, side);
+        clip.timeline_duration = duration;
+        if side == Side::Start {
+            clip.timeline_start = (end - duration).max(0);
+        }
+        self.recompute_duration();
+        true
+    }
+
+    /// Puts `clip` into the main lane as clip number `index` (among the
+    /// others), the lane packed back to back from 00:00 in its new order.
+    fn insert_into_main(&mut self, clip: Clip, index: usize) {
+        let Some(main) = self.tracks.iter_mut().find(|t| t.kind == TrackType::Video) else {
+            return;
+        };
+        let mut ordered: Vec<Clip> = main.clips.drain(..).filter(|c| c.id != clip.id).collect();
+        ordered.sort_by_key(|c| c.timeline_start);
+        ordered.insert(index.min(ordered.len()), clip);
+        let mut at = 0;
+        for c in ordered.iter_mut() {
+            c.timeline_start = at;
+            at += c.timeline_duration - c.out_transition();
+        }
+        main.clips = ordered;
+        self.recompute_duration();
+    }
+
+    /// Drags a main clip to cut `index`, counted among the other main
+    /// clips (0 = first, their count = last).
+    pub fn reorder_main(&mut self, clip_id: &str, index: usize) -> bool {
+        let Some(clip) = self
+            .main_track()
+            .and_then(|t| t.clips.iter().find(|c| c.id == clip_id))
+            .cloned()
+        else {
+            return false;
+        };
+        let before: Vec<String> = self
+            .ordered_main_clips()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        self.insert_into_main(clip, index);
+        let after: Vec<String> = self
+            .ordered_main_clips()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        before != after
+    }
+
+    /// Moves a picture (video / image) from another lane into the main
+    /// lane at cut `index`.
+    pub fn move_into_main(&mut self, clip_id: &str, index: usize) -> bool {
+        let Some(ti) = self
+            .tracks
+            .iter()
+            .position(|t| t.kind != TrackType::Video && t.clips.iter().any(|c| c.id == clip_id))
+        else {
+            return false;
+        };
+        let ci = self.tracks[ti]
+            .clips
+            .iter()
+            .position(|c| c.id == clip_id)
+            .expect("found above");
+        if !matches!(self.tracks[ti].clips[ci].kind.as_str(), "video" | "image") {
+            return false;
+        }
+        let clip = self.tracks[ti].clips.remove(ci);
+        self.insert_into_main(clip, index);
+        true
+    }
+
+    /// Moves a main clip onto `lane` (an overlay video lane, added when it's
+    /// new) at `start`. Its transition stays behind: only main-lane cuts
+    /// have them. The gap it leaves is the magnet's to close.
+    pub fn move_out_of_main(&mut self, clip_id: &str, lane: Track, start: Micros) -> bool {
+        let Some(main) = self.tracks.iter_mut().find(|t| t.kind == TrackType::Video) else {
+            return false;
+        };
+        let Some(i) = main.clips.iter().position(|c| c.id == clip_id) else {
+            return false;
+        };
+        let mut clip = main.clips.remove(i);
+        clip.extra.remove("outTransition");
+        clip.timeline_start = start.max(0);
+        match self.tracks.iter_mut().find(|t| t.id == lane.id) {
+            Some(t) => t.clips.push(clip),
+            None => {
+                let mut lane = lane;
+                lane.clips.push(clip);
+                self.tracks.push(lane);
+            }
+        }
+        self.recompute_duration();
+        true
+    }
+
+    /// An overlay video lane free over [start, end), else a new one (not in
+    /// the project yet: the edit that uses it adds it).
+    pub fn overlay_lane_for(&self, start: Micros, end: Micros) -> Track {
+        let mut overlays: Vec<&Track> = self
+            .tracks
+            .iter()
+            .filter(|t| t.is_overlay_video(&self.id))
+            .collect();
+        overlays.sort_by(|a, b| a.order.total_cmp(&b.order));
+        if let Some(free) = overlays.iter().find(|t| t.free_over(start, end)) {
+            return (*free).clone();
+        }
+        let prefix = overlay_video_prefix(&self.id);
+        let mut n = 1;
+        while self.tracks.iter().any(|t| t.id == format!("{prefix}{n}")) {
+            n += 1;
+        }
+        Track {
+            id: format!("{prefix}{n}"),
+            kind: TrackType::Overlay,
+            name: format!("Overlay {}", overlays.len() + 1),
+            clips: vec![],
+            order: self.next_overlay_video_order(),
+            muted: false,
+            hidden: false,
+            locked: false,
+        }
+    }
+
+    /// A new overlay video lane's order: above the main and overlay video
+    /// lanes, below the text / sticker lanes over them.
+    fn next_overlay_video_order(&self) -> f64 {
+        let base = self
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackType::Video || t.is_overlay_video(&self.id))
+            .map(|t| t.order)
+            .fold(0., f64::max);
+        let above = self
+            .tracks
+            .iter()
+            .filter(|t| {
+                matches!(t.kind, TrackType::Text | TrackType::Overlay)
+                    && !t.is_overlay_video(&self.id)
+                    && t.order > base
+            })
+            .map(|t| t.order)
+            .fold(f64::INFINITY, f64::min);
+        if above.is_finite() {
+            (base + above) / 2.
+        } else {
+            base + 1.
+        }
+    }
+
+    /// Adds `media` at `at` off the main lane: a picture on an overlay video
+    /// lane free there (a new one when none is), sound on the first audio
+    /// lane. Returns the new clip's id.
+    pub fn insert_media_at(&mut self, media: &MediaItem, at: Micros) -> String {
+        let at = at.max(0);
+        let id = new_id("clip");
+        let clip = Clip {
+            id: id.clone(),
+            kind: if !media.has_video {
+                "audio"
+            } else if media.still {
+                "image"
+            } else {
+                "video"
+            }
+            .into(),
+            timeline_start: at,
+            timeline_duration: media.duration,
+            speed: 1.0,
+            source: Some(media.path.clone()),
+            source_start: (!media.still).then_some(0),
+            source_duration: (!media.still).then_some(media.duration),
+            text: None,
+            hidden: false,
+            extra: Map::new(),
+        };
+        if media.has_video {
+            let lane = self.overlay_lane_for(at, at + media.duration);
+            match self.tracks.iter_mut().find(|t| t.id == lane.id) {
+                Some(t) => t.clips.push(clip),
+                None => {
+                    let mut lane = lane;
+                    lane.clips.push(clip);
+                    self.tracks.push(lane);
+                }
+            }
+        } else if let Some(t) = self.tracks.iter_mut().find(|t| t.kind == TrackType::Audio) {
+            t.clips.push(clip);
+        } else {
+            self.tracks.push(Track {
+                id: new_id("track"),
+                kind: TrackType::Audio,
+                name: "Audio".into(),
+                clips: vec![clip],
+                order: 1.,
+                muted: false,
+                hidden: false,
+                locked: false,
+            });
+        }
+        self.recompute_duration();
+        id
+    }
+
+    /// Removes these clips wherever they are (a lane's "Delete track").
+    pub fn delete_clips(&mut self, ids: &[String]) -> bool {
+        let mut any = false;
+        for t in &mut self.tracks {
+            let n = t.clips.len();
+            t.clips.retain(|c| !ids.contains(&c.id));
+            any |= t.clips.len() != n;
+        }
+        self.recompute_duration();
+        any
+    }
+
     /// Every clip start and end on any lane, plus 0 and the end, sorted.
     pub fn edit_points(&self) -> Vec<Micros> {
         let mut points: Vec<Micros> = self
@@ -704,6 +1021,102 @@ mod tests {
             .unwrap();
         assert_eq!(start(&p, &pasted), 7 * SECOND);
         assert_eq!(p.duration, 9 * SECOND);
+    }
+
+    #[test]
+    fn trim_edges_keep_the_other_edge() {
+        let mut p = Project::empty();
+        let a = p.insert_media(&media(4), None);
+        // Left handle in by 1 s: the end stays at 4 s, the source starts 1 s in.
+        assert!(p.trim_edge(&a, Side::Start, 3 * SECOND));
+        let c = p.find_clip(&a).unwrap().1;
+        assert_eq!((c.timeline_start, c.end()), (SECOND, 4 * SECOND));
+        assert_eq!(c.source_start, Some(SECOND));
+        // Out again by half a second: the source window grows back.
+        assert!(p.trim_edge(&a, Side::Start, 3 * SECOND + SECOND / 2));
+        let c = p.find_clip(&a).unwrap().1;
+        assert_eq!(c.source_start, Some(SECOND / 2));
+        // Right handle: the start stays put.
+        assert!(p.trim_edge(&a, Side::End, 2 * SECOND));
+        let c = p.find_clip(&a).unwrap().1;
+        assert_eq!(c.timeline_start, SECOND / 2);
+        assert_eq!(c.source_duration, Some(2 * SECOND));
+    }
+
+    #[test]
+    fn reorder_and_lane_changes() {
+        let mut p = Project::empty();
+        let a = p.insert_media(&media(2), None);
+        let b = p.insert_media(&media(3), None);
+        let c = p.insert_media(&media(1), None);
+        let order = |p: &Project| -> Vec<String> {
+            p.ordered_main_clips()
+                .iter()
+                .map(|c| c.id.clone())
+                .collect()
+        };
+        // a to the end (cut 2 among b, c).
+        assert!(p.reorder_main(&a, 2));
+        assert_eq!(order(&p), vec![b.clone(), c.clone(), a.clone()]);
+        assert_eq!(p.find_clip(&a).unwrap().1.timeline_start, 4 * SECOND);
+        assert!(!p.reorder_main(&a, 2), "same place: no edit");
+
+        // c down onto a new overlay lane at 5 s; the magnet closes the gap.
+        let before = p.clone();
+        let lane = p.overlay_lane_for(5 * SECOND, 6 * SECOND);
+        assert!(lane.is_overlay_video(&p.id));
+        assert!(p.move_out_of_main(&c, lane, 5 * SECOND));
+        let p2 = with_magnet(&before, p.clone(), false);
+        assert_eq!(order(&p2), vec![b.clone(), a.clone()]);
+        assert_eq!(p2.find_clip(&a).unwrap().1.timeline_start, 3 * SECOND);
+        let (lane, clip) = p2.find_clip(&c).unwrap();
+        assert!(lane.is_overlay_video(&p2.id));
+        assert_eq!(clip.timeline_start, 5 * SECOND);
+        // A second clip over the same span gets a second lane.
+        let other = p2.overlay_lane_for(5 * SECOND, 6 * SECOND);
+        assert_ne!(other.id, lane.id);
+        assert!(other.order > lane.order - 1.);
+
+        // Back into the main lane first.
+        let mut p3 = p2.clone();
+        assert!(p3.move_into_main(&c, 0));
+        assert_eq!(order(&p3), vec![c.clone(), b, a]);
+        assert_eq!(p3.duration, 6 * SECOND);
+    }
+
+    #[test]
+    fn nearest_seam() {
+        let mut p = Project::empty();
+        p.insert_media(&media(2), None);
+        p.insert_media(&media(4), None);
+        let clips = p.ordered_main_clips();
+        assert_eq!(nearest_seam_index(&clips, 0), 0);
+        assert_eq!(nearest_seam_index(&clips, 2 * SECOND + 100), 1);
+        assert_eq!(nearest_seam_index(&clips, 5 * SECOND), 2);
+        assert_eq!(seam_at(&clips, 2), 6 * SECOND);
+    }
+
+    #[test]
+    fn drop_below_main_lands_on_a_free_overlay() {
+        let mut p = Project::empty();
+        p.insert_media(&media(4), None);
+        let x = p.insert_media_at(&media(2), SECOND);
+        let y = p.insert_media_at(&media(2), 2 * SECOND);
+        let lx = p.find_clip(&x).unwrap().0.id.clone();
+        let ly = p.find_clip(&y).unwrap().0.id.clone();
+        assert_ne!(lx, ly, "overlapping drops stack on two lanes");
+        let z = p.insert_media_at(&media(1), 3 * SECOND);
+        assert_eq!(p.find_clip(&z).unwrap().0.id, lx, "free again at 3 s");
+    }
+
+    #[test]
+    fn fractional_order_round_trips() {
+        let json = r##"{"version":1,"id":"p","name":"n","createdAt":"a","updatedAt":"b",
+          "canvas":{"width":1,"height":2,"fps":30,"backgroundColor":"#000"},"duration":0,
+          "tracks":[{"id":"t","type":"text","name":"Text","order":1.5,
+          "muted":false,"hidden":false,"locked":false,"clips":[]}]}"##;
+        let p: Project = serde_json::from_str(json).unwrap();
+        assert_eq!(p.tracks[0].order, 1.5);
     }
 
     #[test]

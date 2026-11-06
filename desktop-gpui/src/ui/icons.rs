@@ -92,6 +92,7 @@ icons! {
     Download => (ION, 0xf2ba),
     Reload => (ION, 0xf51a),
     Videocam => (ION, 0xf60d),
+    Shuffle => (ION, 0xf583),
     Keyboard => (MDI, 0xf097b),
     Undo => (MDI, 0xf17b3),
     Redo => (MDI, 0xf17b7),

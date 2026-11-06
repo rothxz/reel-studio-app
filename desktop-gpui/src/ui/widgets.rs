@@ -128,6 +128,11 @@ impl IconButton {
         self.active = Some(on);
         self
     }
+    /// A switch that is only highlighted while on (off reads as normal).
+    pub fn lit(mut self, on: bool) -> Self {
+        self.active = on.then_some(true);
+        self
+    }
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
