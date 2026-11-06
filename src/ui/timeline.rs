@@ -22,7 +22,7 @@ use gpui::{
 
 use crate::decoder::{self, Waveform};
 use crate::editor::{Drag, Editor, Tool, timecode};
-use crate::model::{Clip, Micros, Project, SECOND, Side, Track, TrackType};
+use crate::model::{BeatStrength, Clip, Micros, Project, SECOND, Side, Track, TrackType};
 use crate::theme;
 use crate::ui::icons::Icon;
 use crate::ui::timeline_edit::{
@@ -69,6 +69,8 @@ const SEGMENT_END_GUARD: Micros = 33_333;
 /// A keyframe diamond's size, and its press target.
 const DIAMOND: f32 = 12.;
 const DIAMOND_HIT: f32 = 20.;
+/// How far above a clip's bottom its beat dots sit.
+const BEAT_DOT_INSET: f32 = 5.;
 /// Waveform column spacing (px).
 const WAVE_STEP: f32 = 2.;
 
@@ -1216,6 +1218,9 @@ impl Editor {
                 if let Some(wave) = self.waveform(clip, g.w, shift, lanes) {
                     content = content.child(wave);
                 }
+                if let Some(dots) = beat_dots(clip, shift, self.pps, lanes) {
+                    content = content.child(dots);
+                }
             }
             _ => {}
         }
@@ -1804,6 +1809,53 @@ impl Editor {
             cx,
         );
     }
+}
+
+/// An audio clip's beat markers as dots along its bottom edge, bigger for
+/// stronger beats (monochrome, like the rest of the editor).
+fn beat_dots(
+    clip: &Clip,
+    shift: f32,
+    pps: f32,
+    lanes: Option<Bounds<Pixels>>,
+) -> Option<impl IntoElement + use<>> {
+    let beats = clip.beats();
+    if beats.is_empty() {
+        return None;
+    }
+    let start = clip.timeline_start;
+    Some(
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let left = f32::from(bounds.origin.x) + shift;
+                let y = f32::from(bounds.origin.y + bounds.size.height) - BEAT_DOT_INSET;
+                let (lo, hi) = lanes.map_or((f32::MIN, f32::MAX), |b| {
+                    (f32::from(b.origin.x), f32::from(b.origin.x + b.size.width))
+                });
+                for &(t, strength) in &beats {
+                    let x = left + (t - start) as f32 / SECOND as f32 * pps;
+                    let (r, color) = match strength {
+                        BeatStrength::Weak => (1.6, rgba(0xffffffbf)),
+                        BeatStrength::Medium => (2.3, rgba(0xffffffff)),
+                        BeatStrength::Strong => (3., rgba(0xffffffff)),
+                    };
+                    if x + r < lo || x - r > hi {
+                        continue;
+                    }
+                    window.paint_quad(
+                        fill(
+                            Bounds::new(point(px(x - r), px(y - r)), size(px(r * 2.), px(r * 2.))),
+                            color,
+                        )
+                        .corner_radii(px(r)),
+                    );
+                }
+            },
+        )
+        .absolute()
+        .inset_0(),
+    )
 }
 
 /// One filmstrip tile at clip-box x `x`, `w` wide.

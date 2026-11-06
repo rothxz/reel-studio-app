@@ -214,6 +214,40 @@ impl Clip {
         moved
     }
 
+    /// An audio clip's beat markers inside the stretch it plays, as
+    /// (timeline time, strength). Markers are in source time, so moving,
+    /// trimming or re-speeding the clip never rewrites them.
+    pub fn beats(&self) -> Vec<(Micros, BeatStrength)> {
+        if self.kind != "audio" {
+            return vec![];
+        }
+        let speed = if self.speed > 0. { self.speed } else { 1. };
+        let source_start = self.source_start.unwrap_or(0);
+        self.extra
+            .get("beats")
+            .and_then(|b| b.get("markers"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|m| {
+                let offset = m.get("time")?.as_f64()? - source_start as f64;
+                if offset < 0. || self.source_duration.is_some_and(|d| offset > d as f64) {
+                    return None;
+                }
+                let local = offset / speed;
+                if local > self.timeline_duration as f64 {
+                    return None;
+                }
+                let strength = match m.get("strength").and_then(Value::as_str) {
+                    Some("strong") => BeatStrength::Strong,
+                    Some("medium") => BeatStrength::Medium,
+                    _ => BeatStrength::Weak,
+                };
+                Some((self.timeline_start + local.round() as Micros, strength))
+            })
+            .collect()
+    }
+
     /// Clip volume, 1 = as recorded.
     pub fn volume(&self) -> f64 {
         self.extra
@@ -266,6 +300,14 @@ impl Clip {
             .map(str::to_owned)
             .unwrap_or_else(|| self.kind.clone())
     }
+}
+
+/// How strong a beat marker is (drawn as a bigger dot).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeatStrength {
+    Weak,
+    Medium,
+    Strong,
 }
 
 /// Overlay video lanes are `overlay` tracks with ids under this prefix (the
@@ -665,6 +707,21 @@ impl Project {
         track.clips.push(copy);
         self.recompute_duration();
         Some(id)
+    }
+
+    /// Every audio clip's beats in timeline time, sorted (what edits that
+    /// align to music snap to), leaving out `exclude`'s own.
+    pub fn beat_times(&self, exclude: &str) -> Vec<Micros> {
+        let mut times: Vec<Micros> = self
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackType::Audio)
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.id != exclude)
+            .flat_map(|c| c.beats().into_iter().map(|(t, _)| t))
+            .collect();
+        times.sort_unstable();
+        times
     }
 
     /// Drags a clip's keyframe diamond from `from` to `to` (clip-local).
@@ -1246,5 +1303,29 @@ mod tests {
         assert!(c.move_keyframe(3_500_000, 9_000_000, 50_000));
         assert_eq!(c.keyframe_times(50_000), [0, 4_000_000, 5_000_000]);
         assert!(!c.move_keyframe(1_000_000, 0, 50_000));
+    }
+
+    #[test]
+    fn beats_follow_the_clip_window_and_speed() {
+        let c: Clip = serde_json::from_value(serde_json::json!({
+            "id": "a", "kind": "audio", "timelineStart": 10_000_000, "timelineDuration": 2_000_000,
+            "speed": 2.0, "sourceStart": 1_000_000, "sourceDuration": 4_000_000,
+            "beats": { "markers": [
+                { "id": "0", "time": 500_000, "strength": "strong" },
+                { "id": "1", "time": 1_000_000, "strength": "strong" },
+                { "id": "2", "time": 3_000_000, "strength": "medium" },
+                { "id": "3", "time": 5_000_000 },
+                { "id": "4", "time": 5_500_000 }
+            ] }
+        }))
+        .unwrap();
+        assert_eq!(
+            c.beats(),
+            [
+                (10_000_000, BeatStrength::Strong),
+                (11_000_000, BeatStrength::Medium),
+                (12_000_000, BeatStrength::Weak),
+            ]
+        );
     }
 }

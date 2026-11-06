@@ -204,9 +204,11 @@ impl Editor {
         (SNAP_PX / self.pps * SECOND as f32) as Micros
     }
 
-    /// What a dragged edge snaps to: 00:00 and every other clip's edges.
+    /// What a dragged edge snaps to: 00:00, every other clip's edges and
+    /// the other audio clips' beats.
     fn snap_targets(&self, exclude: &str) -> Vec<Micros> {
         let mut targets = vec![0];
+        targets.extend(self.project.beat_times(exclude));
         for c in self.project.tracks.iter().flat_map(|t| t.clips.iter()) {
             if c.id != exclude {
                 targets.extend([c.timeline_start, c.end()]);
@@ -471,7 +473,8 @@ impl Editor {
         let Some((_, clip)) = self.project.find_clip(clip_id) else {
             return;
         };
-        // It snaps to the clip's edges, the playhead and the other diamonds.
+        // It snaps to the clip's edges, the playhead, the other diamonds and
+        // the beats.
         let eps = keyframe_eps(self.pps);
         let mut targets = vec![];
         if self.prefs.snapping {
@@ -480,6 +483,12 @@ impl Editor {
                 clip.timeline_duration,
                 self.playhead - clip.timeline_start,
             ]);
+            targets.extend(
+                self.project
+                    .beat_times("")
+                    .into_iter()
+                    .map(|b| b - clip.timeline_start),
+            );
             targets.extend(
                 clip.keyframe_times(eps)
                     .into_iter()

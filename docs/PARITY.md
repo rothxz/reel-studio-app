@@ -172,8 +172,13 @@ isn't listed.
   zooming reuses them), the picture on images / stickers, the waveform on
   audio (FFmpeg peaks, clip volume), name + length strip on pictures,
   speed badge, lock / mute badges, hover outline, white selection outline,
-  deactivated / hidden lanes dimmed. *Filmstrip ignores speed curves; no
-  beat dots yet.*
+  deactivated / hidden lanes dimmed. *Filmstrip ignores speed curves.*
+- [x] Beat dots on audio clips: the clip's beat markers (source time →
+  timeline through its window and speed) along the bottom edge, 1.6 /
+  2.3 / 3 px for weak / medium / strong. White, not the old app's yellow
+  accent (the editor stays monochrome). Moved clip edges and keyframe
+  diamonds snap to the beats (a clip not to its own). *Editing beats is
+  the Audio › Beats panel, not ported.*
 - [x] Keyframe diamonds on the selected clip: one ◆ per keyframe time
   (enabled property tracks, 50 ms merged, thinned to one per 12 px), on
   the clip's middle; the one under the playhead red. Click = playhead onto
@@ -275,7 +280,8 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline leftovers: beat dots; the cover editor.
+2. Timeline leftovers: the cover editor; group move of a multi-selection;
+   Graphs badge and tracked-path diamonds.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.
