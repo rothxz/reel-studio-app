@@ -1,0 +1,5 @@
+{
+  "rust-analyzer.linkedProjects": ["Cargo.toml"],
+  "rust-analyzer.cargo.features": ["cpp-engine"],
+  "rust-analyzer.check.command": "clippy"
+}

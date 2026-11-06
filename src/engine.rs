@@ -13,12 +13,6 @@ pub struct ActiveLayer {
     pub is_visual: bool,
 }
 
-pub const BACKEND: &str = if cfg!(feature = "cpp-engine") {
-    "C++ core"
-} else {
-    "Rust stand-in"
-};
-
 #[cfg(feature = "cpp-engine")]
 mod imp {
     use super::*;
@@ -190,18 +184,23 @@ mod imp {
                 return vec![];
             };
             let mut tracks: Vec<_> = p.tracks.iter().filter(|t| !t.hidden).collect();
-            tracks.sort_by_key(|t| t.order);
+            tracks.sort_by(|a, b| a.order.total_cmp(&b.order));
             tracks
                 .into_iter()
                 .flat_map(|track| {
                     track
                         .clips
                         .iter()
-                        .filter(move |c| t >= c.timeline_start && t < c.end())
+                        .filter(move |c| !c.hidden && t >= c.timeline_start && t < c.end())
                         .map(move |c| ActiveLayer {
                             source: c.source.clone().unwrap_or_default(),
+                            // Constant speed only; a still has no source time.
                             source_time: c.source_start.unwrap_or(0)
-                                + ((t - c.timeline_start) as f64 * c.speed) as Micros,
+                                + if c.kind == "image" {
+                                    0
+                                } else {
+                                    ((t - c.timeline_start) as f64 * c.speed) as Micros
+                                },
                             is_visual: matches!(track.kind, TrackType::Video | TrackType::Overlay)
                                 && (c.kind == "video" || c.kind == "image"),
                         })
@@ -230,10 +229,13 @@ mod tests {
             width: 1920,
             height: 1080,
             has_video: true,
+            still: false,
         };
-        let a = p.append_media(&item);
-        p.append_media(&item);
+        let a = p.insert_media(&item, None);
+        p.insert_media(&item, None);
+        let before = p.clone();
         p.set_speed(&a, 2.0); // first clip now 2 s long
+        let p = crate::model::with_magnet(&before, p, true);
         let mut e = Engine::new();
         e.load(&p).expect("engine parses the project");
         let at_1s = e.active_layers(SECOND);

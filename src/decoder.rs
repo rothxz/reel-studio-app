@@ -60,6 +60,7 @@ pub fn probe(path: &str) -> anyhow::Result<MediaItem> {
         width,
         height,
         has_video: video.is_some(),
+        still: is_still,
     })
 }
 
@@ -295,4 +296,224 @@ fn serve(
         }
     }
     Ok(())
+}
+
+/// One small frame of `path` near `at` (a media tile's picture). Blocking:
+/// call it off the UI thread.
+pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<DecodedFrame> {
+    let mut dec = Decoder::open(path, max_width)?;
+    if at > 0 {
+        dec.seek(at)?;
+    }
+    let mut best = None;
+    while let Some((pts, frame)) = dec.next() {
+        let past = pts >= at;
+        best = Some((pts, frame));
+        if past {
+            break;
+        }
+    }
+    let (pts, frame) = best.ok_or_else(|| anyhow::anyhow!("no frame"))?;
+    let (width, height, bgra) = dec.frame_bgra(&frame)?;
+    Ok(DecodedFrame {
+        source: path.to_string(),
+        pts,
+        width,
+        height,
+        bgra,
+    })
+}
+
+// ---- filmstrip tiles ---------------------------------------------------------
+
+/// Decoders the tile thread keeps open (one per recently used file).
+const TILE_DECODERS: usize = 4;
+
+/// Filmstrip pictures for the timeline: one thread, a few files open at
+/// once. A request is answered with a `DecodedFrame` whose `pts` is the
+/// requested time (the caller's cache key), not the frame's own.
+pub struct TileServer {
+    requests: mpsc::Sender<(String, Micros)>,
+}
+
+impl TileServer {
+    pub fn spawn(max_width: u32, out: async_channel::Sender<DecodedFrame>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("filmstrip".into())
+            .spawn(move || serve_tiles(max_width, rx, out))
+            .expect("filmstrip thread starts");
+        TileServer { requests: tx }
+    }
+
+    pub fn request(&self, source: &str, at: Micros) {
+        let _ = self.requests.send((source.to_string(), at));
+    }
+}
+
+impl Decoder {
+    /// The frame showing at `t`: decodes on from the last frame when `t` is
+    /// a little ahead of it, else seeks first. None past the end.
+    fn frame_at(&mut self, t: Micros, last: &mut Option<Micros>) -> Option<ff::frame::Video> {
+        if !last.is_some_and(|p| t >= p && t - p < 2 * SECOND) {
+            self.seek(t).ok()?;
+        }
+        let mut best = None;
+        while let Some((pts, frame)) = self.next() {
+            *last = Some(pts);
+            let reached = pts + self.frame_dur / 2 >= t;
+            best = Some(frame);
+            if reached {
+                break;
+            }
+        }
+        best
+    }
+}
+
+fn serve_tiles(
+    max_width: u32,
+    rx: mpsc::Receiver<(String, Micros)>,
+    out: async_channel::Sender<DecodedFrame>,
+) {
+    // Most recently used last; the last frame each one decoded.
+    let mut open: Vec<(String, Decoder, Option<Micros>)> = vec![];
+    let mut failed: std::collections::HashSet<String> = Default::default();
+    while let Ok(first) = rx.recv() {
+        let mut batch = vec![first];
+        batch.extend(rx.try_iter());
+        // Per file in time order, so neighbouring tiles decode on, not seek.
+        batch.sort();
+        batch.dedup();
+        for (source, at) in batch {
+            if failed.contains(&source) {
+                continue;
+            }
+            let i = match open.iter().position(|(s, ..)| *s == source) {
+                Some(i) => i,
+                None => match Decoder::open(&source, max_width) {
+                    Ok(dec) => {
+                        if open.len() >= TILE_DECODERS {
+                            open.remove(0);
+                        }
+                        open.push((source.clone(), dec, None));
+                        open.len() - 1
+                    }
+                    Err(_) => {
+                        failed.insert(source);
+                        continue;
+                    }
+                },
+            };
+            let entry = open.remove(i);
+            open.push(entry);
+            let (_, dec, last) = open.last_mut().expect("just pushed");
+            let Some(frame) = dec.frame_at(at, last) else {
+                continue;
+            };
+            let Ok((width, height, bgra)) = dec.frame_bgra(&frame) else {
+                continue;
+            };
+            let sent = out.send_blocking(DecodedFrame {
+                source,
+                pts: at,
+                width,
+                height,
+                bgra,
+            });
+            if sent.is_err() {
+                return; // editor closed
+            }
+        }
+    }
+}
+
+// ---- waveforms -----------------------------------------------------------------
+
+/// Loudness peaks of a file's sound, for the timeline's waveforms.
+pub struct Waveform {
+    /// The loudest sample (0–1, any channel) of each slice.
+    pub peaks: Vec<f32>,
+    pub per_second: f64,
+}
+
+/// Peaks per second of sound: one per 10 ms.
+const PEAKS_PER_SECOND: f64 = 100.;
+
+/// Decodes all of `path`'s first sound track into peaks. Blocking: call it
+/// off the UI thread.
+pub fn waveform(path: &str) -> anyhow::Result<Waveform> {
+    use ff::format::Sample;
+    let mut input = ff::format::input(path)?;
+    let stream = input
+        .streams()
+        .best(ff::media::Type::Audio)
+        .ok_or_else(|| anyhow::anyhow!("no sound"))?;
+    let index = stream.index();
+    let ctx = ff::codec::Context::from_parameters(stream.parameters())?;
+    let mut dec = ctx.decoder().audio()?;
+    let per_peak = (dec.rate() as f64 / PEAKS_PER_SECOND).max(1.);
+
+    let mut peaks: Vec<f32> = vec![];
+    let mut seen: u64 = 0;
+    let mut add = |frame: &ff::frame::Audio| {
+        let samples = frame.samples();
+        let channels = (frame.channels() as usize).max(1);
+        let planar = frame.is_planar();
+        let (size, read): (usize, fn(&[u8]) -> f32) = match frame.format() {
+            Sample::U8(_) => (1, |b| (b[0] as f32 - 128.) / 128.),
+            Sample::I16(_) => (2, |b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.),
+            Sample::I32(_) => (4, |b| {
+                i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 / 2_147_483_648.
+            }),
+            Sample::F32(_) => (4, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+            Sample::F64(_) => (8, |b| {
+                f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32
+            }),
+            _ => return,
+        };
+        let planes: Vec<&[u8]> = (0..if planar { channels } else { 1 })
+            .map(|p| frame.data(p))
+            .collect();
+        for s in 0..samples {
+            let mut loud = 0f32;
+            for c in 0..channels {
+                let (plane, i) = if planar {
+                    (c, s)
+                } else {
+                    (0, s * channels + c)
+                };
+                if let Some(b) = planes[plane].get(i * size..(i + 1) * size) {
+                    loud = loud.max(read(b).abs());
+                }
+            }
+            let slot = (seen as f64 / per_peak) as usize;
+            if slot >= peaks.len() {
+                peaks.resize(slot + 1, 0.);
+            }
+            peaks[slot] = peaks[slot].max(loud.min(1.));
+            seen += 1;
+        }
+    };
+
+    let mut frame = ff::frame::Audio::empty();
+    for (s, packet) in input.packets() {
+        if s.index() != index {
+            continue;
+        }
+        if dec.send_packet(&packet).is_err() {
+            continue;
+        }
+        while dec.receive_frame(&mut frame).is_ok() {
+            add(&frame);
+        }
+    }
+    let _ = dec.send_eof();
+    while dec.receive_frame(&mut frame).is_ok() {
+        add(&frame);
+    }
+    Ok(Waveform {
+        peaks,
+        per_second: PEAKS_PER_SECOND,
+    })
 }

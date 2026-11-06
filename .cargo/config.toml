@@ -1,0 +1,9 @@
+# Local defaults for the workspace layout (~/Project/reel-studio-app next to
+# ~/Project/reel-studio). An exported REEL_ENGINE_DIR still wins.
+[env]
+REEL_ENGINE_DIR = { value = "../reel-studio/modules/video-engine/cpp", relative = true, force = false }
+
+[alias]
+# The app as it should be developed: on the shared C++ engine.
+dev = "run --release --features cpp-engine --"
+t = "test --features cpp-engine"

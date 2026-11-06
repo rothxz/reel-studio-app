@@ -2,35 +2,42 @@
 
 Can the desktop editor leave Electron for a native Rust app built on
 [GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor)? This
-folder is a working spike that tries to answer that. It is **not** the shipping
+branch is a working spike that tries to answer that. It is **not** the shipping
 desktop app. Releases on this repo are still the Electron build.
 
-![The spike: media library, player, inspector and timeline](docs/screenshot.jpg)
+![The spike: media library, player, inspector and timeline](screenshot.jpg)
 
 ## What it does
 
-- Uses the desktop editor's layout in a native window: media library | player |
-  inspector, with a timeline below.
-- Imports video files (Import button, ⌘I, drag and drop, or command-line
-  args) and probes them with FFmpeg.
-- Previews video by decoding in-process (ffmpeg-next) on one thread per source
-  file. The frame lands in GPUI as a GPU texture. Requests are "latest wins",
-  so a fast scrub decodes only the frame it stops on. Playback decodes forward
-  without re-seeking. Phone clips with a rotation flag are turned upright,
-  checked against FFmpeg's own auto-rotate.
-- Supports these edits: append, split (S), delete (⌫, the main lane closes
-  the gap), speed 0.5×/1×/2×/4× (later clips shift), select, and scrub/zoom
-  the timeline.
-- Opens and saves projects as JSON in the **same document format the app
-  uses** (`Project` / `Track` / `Clip`). Fields this spike doesn't know about
+- Opens on a **projects home** (greeting, New video, Recent list). New video
+  takes files from a dialog or a drop; projects are JSON files in the app's
+  data folder, saved shortly after each edit, on close and on quit.
+- The editor follows the old desktop editor's layout and look: header (✕,
+  save state, name, Beta, Shortcuts, resolution, Export), browser | player
+  | inspector over the timeline toolbar and timeline, with draggable,
+  remembered gutters. Same palette, Nunito / IBM Plex Mono, and the same
+  icon glyphs.
+- Browser: the eight tabs, with a Media library of thumbnail tiles (Added
+  badge, length); a click inserts the file at the playhead.
+- Player: the project canvas fitted in the panel, HH:MM:SS:FF timecode,
+  go to start / frame back / play / frame forward / go to end, ratio menu,
+  full-screen preview. Frames are decoded in-process (ffmpeg-next), one
+  thread per source, latest request wins; rotation flags are applied.
+- Inspector: project Details, or the selected clip's tabs per kind (Speed ›
+  Normal is the first working panel).
+- Timeline toolbar and timeline: undo / redo, Select / Split tool, delete
+  left / right, split / delete / duplicate, main track magnet + linkage,
+  zoom slider and fit; lanes with lock / eye / mute, ruler, playhead.
+- Every shortcut of the old editor (one table drives keys, menus, tooltips
+  and the Shortcuts dialog, ⌘/), and undo for every edit.
+- The document is the **same JSON the app uses**; fields not edited here
   (keyframes, effects, masks…) are kept and written back untouched.
-- Can run on the **shared C++ engine** (`--features cpp-engine`). Rust then
-  drives the same `videoengine::Engine` the iOS/Android apps link, through a
-  ~100-line C shim (`engine-shim/reel_engine.cpp`). The engine is the
-  playback clock, and the preview asks it which clips are visible and what
-  source time to show (`FindActiveClips` + `ClipOffsetToSourceTime`, so
-  speed curves, reverse and freeze come for free). Without the feature, a
-  small Rust stand-in keeps the crate buildable from this repo alone.
+- Runs on the **shared C++ engine** (`--features cpp-engine`) through a
+  small C shim (`engine-shim/reel_engine.cpp`): playback clock, which clips
+  are visible and their source times (speed curves, reverse, freeze). A
+  Rust stand-in keeps the crate buildable from this repo alone.
+
+`docs/PARITY.md` lists what is done and what isn't, item by item.
 
 ## Run it
 
@@ -44,10 +51,20 @@ REEL_ENGINE_DIR=/path/to/reel-studio/modules/video-engine/cpp \
   cargo run --release --features cpp-engine
 
 cargo test                            # model + engine tests (either backend)
+
+# In the ~/Project workspace layout (reel-studio next to reel-studio-app),
+# .cargo/config.toml already points REEL_ENGINE_DIR there:
+cargo dev ~/Movies/a.mp4              # run --release --features cpp-engine
+cargo t                               # tests on the C++ engine
 ```
 
-Keys: Space play/pause · S split · ⌫ delete · ←/→ one frame · Home start ·
-⌘=/⌘- zoom · ⌘I import · ⌘O open project · ⌘S save project.
+Working on it: `/CLAUDE.md` is the context (rules, architecture, where each
+part of the old editor lives), and `docs/PARITY.md` tracks what's done.
+
+Keys are the old editor's (⌘/ lists them): Space play · ⌘B split · ⌫
+delete · Q / W delete left / right · ⌘Z / ⌘⇧Z undo / redo · ←/→ frame ·
+↑/↓ edit point · ⌘= / ⌘- / ⇧Z zoom · ⌘I import · ⌘O import a project JSON
+· ⌘⇧S save a copy.
 
 ## What we measured (M-series Mac, macOS 27, release build)
 
@@ -98,10 +115,15 @@ Until step 1 lands, the Electron app stays the one people download.
 ## Layout
 
 ```
-src/main.rs        window, menus, key bindings
-src/editor.rs      the editor view (library, player, inspector, timeline)
+src/main.rs        window, fonts, menus
+src/editor.rs      editor state, edits + undo, playback, layout, projects
+src/shortcuts.rs   the shortcut table
 src/model.rs       project document (serde, round-trips unknown fields)
+src/projects.rs    projects folder
 src/engine.rs      engine binding: C++ core (feature) or Rust stand-in
-src/decoder.rs     FFmpeg probe + per-file decode threads → BGRA frames
+src/decoder.rs     FFmpeg probe, thumbnails, per-file decode threads
+src/ui/            panels: header, home, browser, player, inspector,
+                   toolbar, timeline, dialogs, widgets, icons
 engine-shim/       C ABI over videoengine::Engine (compiled by build.rs)
+assets/fonts/      bundled fonts (OFL / MIT / Apache, see README there)
 ```
