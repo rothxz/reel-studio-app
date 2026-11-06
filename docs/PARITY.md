@@ -156,8 +156,11 @@ isn't listed.
 - [x] Playhead: shield on the ruler + line; timecode readout top left
 - [~] Track headers: lane icon, Lock / Hide / Mute (lanes with sound) over
   all the lane's tracks, one undo step each; locking drops the lane's clips
-  from the selection; "…" → Select all on track / Delete track. *No Cover
-  tile on the main lane.*
+  from the selection; "…" → Select all on track / Delete track. The
+  column is 208 px, as the old desktop's.
+- [~] Cover tile at the left of the main lane's header: the saved cover
+  (`cover.imageUri`), else the main lane's first frame, under a shade with
+  ✎ Cover. *A click says the cover editor isn't ported yet.*
 - [x] Captions lane: auto captions (text clips with caption data) leave the
   Text lane for their own lane at the top of the stack, one row, caption
   colour. Captions and Text share the text track, so their switches set
@@ -266,7 +269,7 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline leftovers: Cover tile, keyframe diamonds, beat dots.
+2. Timeline leftovers: keyframe diamonds, beat dots; the cover editor.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.

@@ -41,7 +41,9 @@ pub const LANE_HEIGHT: f32 = 32.;
 pub const LANE_GAP: f32 = 6.;
 /// Room under the last lane.
 pub const BOTTOM_PAD: f32 = 12.;
-pub const LANE_HEADER_WIDTH: f32 = 160.;
+/// The track header column (the old desktop's: its 220 px head offset
+/// less the 12 px lead-in).
+pub const LANE_HEADER_WIDTH: f32 = 208.;
 /// How close (px) an edge must come to snap.
 pub const SNAP_PX: f32 = 10.;
 /// The shortest a trim leaves a clip.
@@ -385,6 +387,45 @@ fn filmstrip(clip: &Clip, width: f32) -> (f32, Vec<Micros>) {
     (width / count as f32, times)
 }
 
+/// Where the main lane's Cover tile gets its picture.
+#[derive(Clone, Debug, PartialEq)]
+enum CoverSource {
+    /// A picture file (the saved cover, or an image clip).
+    Still(String),
+    /// A video frame: (file, source time).
+    Frame(String, Micros),
+}
+
+/// The saved cover, else the main lane's first frame (the clip at 00:00,
+/// or the last one, at the source time it shows there).
+fn cover_source(project: &Project) -> Option<CoverSource> {
+    if let Some(uri) = project
+        .extra
+        .get("cover")
+        .and_then(|c| c.get("imageUri"))
+        .and_then(|u| u.as_str())
+    {
+        let path = uri.strip_prefix("file://").unwrap_or(uri);
+        if !path.is_empty() {
+            return Some(CoverSource::Still(path.to_string()));
+        }
+    }
+    let clips: Vec<&Clip> = project
+        .ordered_main_clips()
+        .into_iter()
+        .filter(|c| matches!(c.kind.as_str(), "video" | "image"))
+        .collect();
+    let clip = clips.iter().find(|c| c.end() > 0).or(clips.last())?;
+    let src = clip.source.clone().filter(|s| !s.is_empty())?;
+    if clip.kind == "image" {
+        return Some(CoverSource::Still(src));
+    }
+    // A frame clear of the clip's end, where a decoder can come up empty.
+    let offset =
+        (-clip.timeline_start).clamp(0, (clip.timeline_duration - SEGMENT_END_GUARD).max(0));
+    Some(CoverSource::Frame(src, source_time_at(clip, offset)))
+}
+
 /// Clip fills by kind (the old desktop timeline's).
 fn clip_color(kind: &str) -> Rgba {
     match kind {
@@ -496,6 +537,11 @@ impl Editor {
                 "audio" => sounds.push(src.to_string()),
                 _ => {}
             }
+        }
+        match cover_source(&self.project) {
+            Some(CoverSource::Still(path)) => stills.push(path),
+            Some(CoverSource::Frame(src, t)) => tiles.push((src, t)),
+            None => {}
         }
         for key in tiles {
             if !self.tiles.contains_key(&key) && self.tiles_pending.insert(key.clone()) {
@@ -1448,6 +1494,7 @@ impl Editor {
             lane.track_ids.first().cloned().unwrap_or_default(),
             lane.kind
         );
+        let cover = (lane.kind == LaneKind::Main).then(|| self.cover_tile(cx));
         let toggle = |flag: LaneFlag, on: bool, icon: Icon, label: &'static str| {
             let targets = targets.clone();
             icon_button(SharedString::from(format!("{label}-{key}")), icon, label)
@@ -1472,7 +1519,10 @@ impl Editor {
                     .min_w_0()
                     .flex()
                     .items_center()
-                    .child(lane.kind.icon().el(16., theme::text_tertiary()))
+                    .map(|d| match cover {
+                        Some(tile) => d.child(tile),
+                        None => d.child(lane.kind.icon().el(16., theme::text_tertiary())),
+                    })
                     .id(SharedString::from(format!("lane-icon-{key}")))
                     .tooltip(crate::ui::widgets::tooltip(lane.kind.name(), None))
                     // The Captions icon picks the caption under the playhead.
@@ -1528,6 +1578,61 @@ impl Editor {
                         .size(15.),
                     ),
             )
+    }
+
+    /// The main lane's Cover tile: the cover (or first frame) under a shade
+    /// with ✎ Cover. The cover editor isn't ported yet.
+    fn cover_tile(&self, cx: &mut Context<Self>) -> AnyElement {
+        let picture = match cover_source(&self.project) {
+            Some(CoverSource::Still(path)) => self.thumbs.get(&path).cloned(),
+            Some(CoverSource::Frame(src, t)) => self.tiles.get(&(src, t)).cloned(),
+            None => None,
+        };
+        let size = MAIN_LANE_HEIGHT - 8.;
+        div()
+            .id("cover-tile")
+            .relative()
+            .flex_none()
+            .size(px(size))
+            .rounded(px(6.))
+            .overflow_hidden()
+            .bg(theme::clip_video())
+            .cursor_pointer()
+            .active(|s| s.opacity(0.6))
+            .tooltip(crate::ui::widgets::tooltip("Edit cover", None))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|ed, _, _, cx| {
+                ed.toast("Cover editor isn't in the native editor yet", cx);
+            }))
+            .when_some(picture, |d, image| {
+                d.child(
+                    img(image)
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .object_fit(ObjectFit::Cover),
+                )
+            })
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(2.))
+                    .bg(rgba(0x00000059))
+                    .child(Icon::Pencil.el(13., theme::text()))
+                    .child(
+                        div()
+                            .text_size(px(theme::XXS))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme::text())
+                            .child("Cover"),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// The Captions lane icon: selects the caption under the playhead,
@@ -1745,6 +1850,29 @@ mod tests {
         let seams = transition_seams(&[&a, &b]);
         assert_eq!(seams["a"], (0, SECOND / 2));
         assert_eq!(seams["b"], (SECOND / 2, 0));
+    }
+
+    #[test]
+    fn cover_is_the_saved_one_else_the_first_frame() {
+        let mut p = Project::empty();
+        assert_eq!(cover_source(&p), None);
+        let mut v = clip("v", 0, 4);
+        v.kind = "video".into();
+        v.source = Some("/m/a.mp4".into());
+        v.source_start = Some(2 * SECOND);
+        p.tracks[0].clips.push(v);
+        assert_eq!(
+            cover_source(&p),
+            Some(CoverSource::Frame("/m/a.mp4".into(), 2 * SECOND))
+        );
+        p.extra.insert(
+            "cover".into(),
+            serde_json::json!({ "imageUri": "file:///covers/c.jpg" }),
+        );
+        assert_eq!(
+            cover_source(&p),
+            Some(CoverSource::Still("/covers/c.jpg".into()))
+        );
     }
 
     #[test]
