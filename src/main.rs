@@ -5,6 +5,7 @@ mod history;
 mod model;
 mod prefs;
 mod projects;
+mod selection;
 mod shortcuts;
 mod theme;
 mod ui;

@@ -155,10 +155,10 @@ isn't listed.
   ⌘= / ⌘- zoom around the playhead; ⇧Z fits (80 px left after the end)
 - [x] Playhead: shield on the ruler + line; timecode readout top left
 - [~] Track headers: lane icon, Lock / Hide / Mute (lanes with sound) over
-  all the lane's tracks, one undo step each; locking drops the selection;
-  "…" → Delete track. *No Cover tile on the main lane; no "Select all on
-  track" (needs multi-select); captions share the Text lane instead of
-  their own Captions lane.*
+  all the lane's tracks, one undo step each; locking drops the lane's clips
+  from the selection; "…" → Select all on track / Delete track. *No Cover
+  tile on the main lane; captions share the Text lane instead of their own
+  Captions lane.*
 - [x] Clip visuals: kind colours (old desktop palette), filmstrip tiles on
   video (decoded on a background thread, frames snapped to a time grid so
   zooming reuses them), the picture on images / stickers, the waveform on
@@ -187,9 +187,17 @@ isn't listed.
   lane at that time. One undo step.
 - [x] Click a clip selects it (no seek, as the old app); the Split tool
   cuts it; a locked clip acts like empty space
+- [x] Multi-select: "Select all on track", ⇧ / ⌘ click adds or removes a
+  clip, ⇧ / ⌘ + drag on empty lane space draws a rubber band (a plain drag
+  still scrubs, as the old app). Every selected clip gets the outline;
+  trim handles only on a lone selection. The last picked is the primary:
+  the inspector, Split, Duplicate and Copy follow it; Delete (⌫, toolbar,
+  menu) and Deactivate (V) take them all, one undo step. *No group move
+  yet.*
 - [~] Copy / cut / paste / duplicate (⌘C/X/V/D): in-app clipboard; paste on
   the main lane goes in at the cut after the clip under the playhead.
-  *No multi-select.*
+  *One clip (the primary), as the old app; cut deletes the whole
+  selection.*
 - [x] Context menus: clip (Copy, Cut, Paste, Delete, Split, Duplicate,
   Deactivate / Activate, with shortcut hints and disabled states), empty
   lane space (Paste, Split, main track magnet, linkage, preview axis,
@@ -253,8 +261,8 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline leftovers: multi-select (rubber band, ⇧/⌘ click, "Select all
-   on track"), Captions lane, Cover tile, keyframe diamonds, beat dots.
+2. Timeline leftovers: Captions lane, Cover tile, keyframe diamonds, beat
+   dots.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.

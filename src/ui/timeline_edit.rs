@@ -23,6 +23,7 @@ use gpui::{
 
 use crate::editor::{Drag, Editor, PopupItem};
 use crate::model::{self, Clip, MediaItem, Micros, SECOND, Side};
+use crate::selection::Selection;
 use crate::shortcuts::Shortcut;
 use crate::theme;
 use crate::ui::timeline::{
@@ -97,6 +98,14 @@ impl ClipDrag {
     pub fn live_end(&self) -> Micros {
         self.live_start + self.live_duration
     }
+}
+
+/// A rubber band: from where the press was to the pointer (window
+/// points); the clips it touches join what was selected before.
+pub struct Marquee {
+    pub origin: Point<Pixels>,
+    pub to: Point<Pixels>,
+    base: Selection,
 }
 
 /// Where a file dragged over the timeline would land.
@@ -410,7 +419,7 @@ impl Editor {
                         );
                     }
                 }
-                self.selected = Some(id);
+                self.selected.set(id);
             }
             ClipDragMode::Trim(side) => {
                 let duration = d.live_duration;
@@ -424,6 +433,88 @@ impl Editor {
             }
         }
         cx.notify();
+    }
+
+    // ---- rubber band ---------------------------------------------------------
+
+    /// ⇧ / ⌘ + press on empty lane space below the ruler starts a rubber
+    /// band (false: on the ruler, which keeps scrubbing).
+    pub fn start_marquee(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        let Some(b) = self.measured("lanes") else {
+            return false;
+        };
+        if f32::from(at.y - b.origin.y) < MAIN_TOP - 4. {
+            return false;
+        }
+        self.drag = Some(Drag::Marquee(Box::new(Marquee {
+            origin: at,
+            to: at,
+            base: self.selected.clone(),
+        })));
+        cx.notify();
+        true
+    }
+
+    pub fn update_marquee(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(Drag::Marquee(mut m)) = self.drag.take() else {
+            return;
+        };
+        m.to = at;
+        let mut sel = m.base.clone();
+        for id in self.clips_in_rect(m.origin, m.to) {
+            if !sel.contains(&id) {
+                sel.add(id);
+            }
+        }
+        self.selected = sel;
+        self.drag = Some(Drag::Marquee(m));
+        cx.notify();
+    }
+
+    /// The unlocked clips whose boxes the rectangle between window points
+    /// `a` and `b` touches.
+    pub fn clips_in_rect(&self, a: Point<Pixels>, b: Point<Pixels>) -> Vec<String> {
+        let Some(lanes) = self.measured("lanes") else {
+            return vec![];
+        };
+        let top = f32::from(a.y.min(b.y) - lanes.origin.y);
+        let bottom = f32::from(a.y.max(b.y) - lanes.origin.y);
+        let t0 = self.time_at(a.x.min(b.x));
+        let t1 = self.time_at(a.x.max(b.x));
+        let p = &self.project;
+        let hits = |c: &Clip, y0: f32, y1: f32| {
+            y0 < bottom && y1 > top && c.timeline_start < t1 && c.end() > t0
+        };
+        let usable = |t: &model::Track, c: &Clip| !t.locked && !c.locked();
+        let (main, stack, _) = lane_layouts(p);
+        let mut out = vec![];
+        for tid in &main.track_ids {
+            if let Some(t) = p.tracks.iter().find(|t| &t.id == tid) {
+                for c in &t.clips {
+                    if usable(t, c) && hits(c, MAIN_TOP, MAIN_BOTTOM) {
+                        out.push(c.id.clone());
+                    }
+                }
+            }
+        }
+        // The stack only counts where its window shows it.
+        let (top, bottom) = (top.max(STACK_TOP), bottom);
+        if bottom > top {
+            for lane in &stack {
+                for t in p.tracks.iter().filter(|t| lane.track_ids.contains(&t.id)) {
+                    for c in &t.clips {
+                        let y = STACK_TOP + lane.clip_top(&c.id) - self.lane_scroll_y;
+                        if usable(t, c)
+                            && y.max(STACK_TOP) < bottom
+                            && hits(c, y, y + lane.row_height)
+                        {
+                            out.push(c.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// How far right the timeline may scroll: until the end (or a dragged
@@ -623,7 +714,7 @@ impl Editor {
             },
             cx,
         );
-        self.selected = last;
+        self.selected.set_opt(last);
         cx.notify();
     }
 
@@ -727,11 +818,22 @@ impl Editor {
             .collect();
         let main = tracks.iter().any(|t| self.project.is_main_track(&t.id));
         let empty = ids.is_empty();
+        let select_ids = ids.clone();
         let items = vec![
+            PopupItem::new(
+                "Select all on track",
+                move |ed: &mut Editor, _: &mut Window, cx: &mut Context<Editor>| {
+                    ed.selected.set_all(select_ids.clone());
+                    cx.notify();
+                },
+            )
+            .disabled(locked || empty),
+            PopupItem::separator(),
             PopupItem::new(
                 "Delete track",
                 move |ed: &mut Editor, _: &mut Window, cx: &mut Context<Editor>| {
                     let ids = ids.clone();
+                    ed.selected.clear();
                     if ed.edit("Delete Track", main, None, |p| p.delete_clips(&ids), cx) {
                         ed.toast("Track deleted", cx);
                     }
