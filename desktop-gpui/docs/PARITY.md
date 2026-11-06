@@ -7,42 +7,63 @@ isn't listed.
 
 ## Shell and layout
 
-- [~] Four panels: browser | player | inspector over the timeline toolbar +
-  timeline. *Fixed sizes: no gutters, splitters or remembered sizes yet.*
-- [ ] Drag dividers (browser 260–640, inspector 260–560, timeline ≥180,
-  player ≥320 wide); double-click resets; sizes persisted.
-- [ ] Defaults: browser = share of the window within 300–440, inspector
-  340, timeline 40 % of height, 6 px gutters, 40 px header.
-- [~] Native window, transparent title bar with traffic lights. *Title is
-  set; header doesn't double as a drag region yet.*
-- [ ] Projects home (list, new project, open, delete, rename) before the
-  editor; the header's ✕ returns to it.
-- [ ] Project persistence on disk + autosave; header "SAVED · LOCAL" /
-  "Unsaved" state.
-- [ ] App menu (File, Edit, View, Help) mirroring the shortcuts.
+- [x] Four rounded panels: browser | player | inspector over the timeline
+  toolbar + timeline, 6 px gutters.
+- [x] Drag dividers (browser 260–640, inspector 260–560, timeline ≥180,
+  player ≥320 wide); double-click resets; sizes persisted
+  (`desktop-editor.json` in the data folder, with the timeline switches).
+- [x] Defaults: browser = 24 % of the window within 300–440, inspector
+  340, timeline 40 % of height, 40 px header.
+- [~] Native window, transparent title bar with traffic lights; double-click
+  on the header zooms. *Dragging the window by the header's empty parts
+  isn't wired (GPUI's mac backend has no `start_window_move`).*
+- [~] Projects home: greeting + drafts count, New video (file dialog or
+  drop: a new project with those files), Recent list (thumbnail, length,
+  "4m ago"), click opens, right click → Open / Delete with confirm; the
+  header's ✕ saves and returns to it. *No rename yet (needs a text field);
+  no multi-select delete; the phone-only cards (photo, other tools) are
+  left out on purpose, as the old desktop build does.*
+- [x] Project persistence: one JSON per project in the data folder's
+  `projects/`, written atomically; saved 1.5 s after the last edit, on ✕,
+  on window close and on quit; header SAVED · LOCAL / UNSAVED CHANGES.
+  ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
+- [~] App menu: File, Edit, View, Playback built from the shortcut table
+  (same labels and keys). *No Help menu yet.*
 - [ ] Settings dialog (language, appearance, storage, updates).
-- [ ] Toasts, blocking progress dialog (long jobs), confirm dialogs.
+- [~] Toasts (single slot, 1.6 s, as the old app), confirm dialog, popup
+  menus. *No blocking progress dialog yet.*
 - [ ] Auto-update + installers (mac dmg/zip, Windows, Linux) to replace
   electron-builder / electron-updater.
 
 ## Header
 
-- [ ] ✕ close project
-- [ ] Saved status (dot + SAVED · LOCAL)
-- [~] Project name. *Shown; no ▾ menu (rename, details) yet.*
-- [ ] BETA badge
-- [ ] AI agent toggle (opens the agent panel in the inspector slot)
-- [ ] Shortcuts button → Shortcuts dialog (⌘/)
-- [ ] Export resolution ▾ (e.g. 1080p)
-- [ ] Export button (⌘E) → export dialog with progress + preview
+- [x] ✕ close project (saves, back to the projects home)
+- [x] Saved status (✓ SAVED · LOCAL / • UNSAVED CHANGES)
+- [~] Project name ▾. *Shown; a click shows Details in the inspector.
+  Rename needs a text field.*
+- [x] BETA badge
+- [ ] AI agent toggle (opens the agent panel in the inspector slot). *Hidden,
+  as in the old app when the agent isn't available.*
+- [x] Shortcuts button → Shortcuts dialog (⌘/), with tooltip + key
+- [x] Export resolution ▾ (720p / 1080p / 4K, remembered)
+- [~] Export button (⌘E). *Says export isn't available yet: no desktop
+  encoder (see Export).*
 
 ## Browser (left)
 
-- [~] Media: Import button, item count, tiles. *List rows, no thumbnail
-  tiles, "Added" badge or duration overlay; no folder/stock tabs.*
-- [x] Import: file dialog (⌘I), drag and drop, command-line paths
-- [ ] Media tile: thumbnail, duration, "Added" badge, drag to timeline,
-  + to append, context menu (delete, reveal)
+- [x] Tab row (icon over label): Media, Audio, Text, Sticker, Effects,
+  Transitions, Captions, Filter; sub-nav for tabs with several views
+  (Music / Sound / Voiceover, Add text / Text template, …). *Only Media has
+  content; the others say they're not in the native editor yet.*
+- [x] Media: Import button, item count, tile grid sized to the panel
+  (min 104 px, 10 px gaps). Import / drop puts files in the library, not
+  on the timeline; the library also lists every file the project uses.
+- [x] Import: file dialog (⌘I), drag and drop, command-line paths (a new
+  video from them)
+- [~] Media tile: thumbnail (decoded off the UI thread), MM:SS, "Added"
+  badge, hover border + ⊕, click inserts on the main lane at the playhead
+  (before the clip whose middle is past it). *No drag onto the timeline,
+  no context menu.*
 - [ ] Audio: Music (catalog + search), Sound effects, Voiceover (record)
 - [ ] Text: Add text (Default, Draw), Text templates
 - [ ] Stickers: stickers, GIFs (catalog via the media proxy)
@@ -51,37 +72,44 @@ isn't listed.
 - [ ] Transitions
 - [ ] Captions: Auto generate, Upload file (.srt/.vtt/.ass), Caption styles
 - [ ] Filters
-- [ ] Tab strip overflow chevron (›) when the panel is narrow
+- [~] Tab strip overflow: the row scrolls sideways when the panel is
+  narrow. *No ‹ › arrow buttons yet.*
 
 ## Player
 
 - [x] Frame-accurate preview of the top visible video clip (FFmpeg decode,
   rotation applied)
-- [~] Canvas fitted in the panel (letterboxed). *Uses the frame's own
-  aspect; should be the project canvas with background colour/blur.*
-- [ ] "Player" panel title
+- [~] The project canvas fitted in the panel on near-black, filled with
+  the canvas background colour; the top clip drawn contain-fit in it.
+  *No background blur / image yet.*
+- [x] "Player" panel title
 - [ ] Real compositor: all layers (overlays, images, text, stickers,
   drawings), transforms, keyframes, masks, crop, blend modes, filters,
   adjust, effects, transitions, background, cutout
 - [ ] Audio playback in sync (mixer, volume, mute, fades)
-- [~] Timecode `current | total`. *Shows MM:SS:FF; old app is HH:MM:SS:FF.*
-- [~] Transport. *Play/Pause only; add ⏮ go to start, ◀ previous frame,
-  ▶ next frame, ⏭ go to end buttons (keys exist for ←/→/Home).*
-- [ ] Ratio button (16:9 …) → canvas ratio picker
-- [ ] Fullscreen preview (⌘⇧F)
+- [x] Timecode `HH:MM:SS:FF | HH:MM:SS:FF` (mono)
+- [x] Transport: ⏮ go to start, ◀ previous frame, ▶/⏸, ▶ next frame,
+  ⏭ go to end, each with tooltip + key
+- [x] Ratio badge (16:9, 0.73:1 …) → ratio menu (Original, 9:16, 1:1,
+  16:9, 4:3, 3:4, 5.8", 2:1, 2.35:1, 1.85:1; 1080 px short side), undoable
+- [x] Fullscreen preview (⌘⇧F, Esc leaves): the player alone
 - [ ] On-canvas gizmo: select, move, scale, rotate layers; preview axis
   guides (S)
 - [ ] Hardware decode (VideoToolbox / D3D11VA / VA-API) + zero-copy frames
 
 ## Inspector (right)
 
-- [~] Nothing selected: project details. *Basic rows; match
-  `DesktopProjectDetails`.*
-- [~] Clip selected: details + speed buttons + split/delete. *Placeholder;
-  replace with the tabbed inspector below.*
-- [ ] Tabbed inspector per kind (`inspectorTabs.ts`):
-  - [ ] Video: Visual (Basic, Rotate, Remove BG, Mask, Blend, Background on
-    main lane) · Audio (Volume) · Speed (Normal, Curve) · Animation · Adjust
+- [x] Nothing selected: Details (Name, Aspect ratio, Resolution, Frame
+  rate, Duration, Clips) and Modify → ratio menu.
+- [x] Clip selected: the tab row and sub-tab pills per kind from one
+  table (`ui/inspector.rs`), the open sub-tab kept across clips that have
+  it, else the clip's first. *Panels are placeholders except Speed ›
+  Normal.*
+- [~] Tabbed inspector per kind (`inspectorTabs.ts`). *Tabs done; panels:*
+  - [~] Video: Visual (Basic, Rotate, Remove BG, Mask, Splice, Background
+    on main lane) · Audio (Volume) · Speed (Normal ✓, Curve) · Animation ·
+    Adjust. *Speed › Normal: log slider 0.1–100× snapping to 1×, read-out,
+    length before → after, reset; one undo step per drag.*
   - [ ] Image: Visual · Speed · Animation · Adjust
   - [ ] Text: Text (Basic, Templates, Fonts, Effects, Bubbles) · Animation ·
     Visual (Basic)
@@ -90,48 +118,65 @@ isn't listed.
   - [ ] Audio: Volume, Beats, Duration
   - [ ] Effect: Effects (replace), Adjust
   - [ ] Sticker: Visual (Basic) · Drawing: Animation
-- [ ] Shared controls: number field with drag-scrub, slider row, select,
-  colour swatches, keyframe ◇ per property
+- [~] Shared controls: section heading with reset, label row, slider row
+  (any slider: drag anywhere, live value, commit on release), read-out box,
+  segment pills. *No editable number field (needs a text field), select,
+  colour swatches or keyframe ◇ yet.*
 - [ ] AI agent panel (providers, key vault, chat, tools, `look`), shown in
   the inspector slot
 
 ## Timeline toolbar
 
-- [~] Split, Delete. *As text buttons; old app uses icon buttons with
-  tooltips + shortcut hints.*
-- [ ] Undo / Redo (⌘Z, ⌘⇧Z / ⌘Y)
-- [ ] Select tool (A) / Split tool (B)
-- [ ] Delete left (Q), Delete right (W)
-- [ ] The selected clip's actions (`useClipTools` minus inspector tools:
-  replace, crop, duplicate, freeze, extract audio, reverse, …)
-- [ ] Keyframe ◇ (add/remove at playhead)
-- [ ] Toggles: main-lane magnet (P), linkage, preview axis (S), snapping (N)
-- [ ] Zoom to fit (⇧Z), zoom −/slider/+ (⌘- / ⌘=)
+- [x] Icon buttons (28 px) with hover tooltips "Label  key"
+- [x] Undo / Redo (⌘Z, ⌘⇧Z / ⌘Y), disabled when there's nothing to do
+- [x] Select tool (A) / Split tool (B): the blade cuts a clicked clip at the
+  click (frame-snapped); Esc goes back to Select
+- [x] Delete left (Q), Delete right (W): selected clip under the playhead,
+  else the main clip; trims the source window; magnet closes the gap
+- [~] The selected clip's actions. *Split, Delete, Duplicate (per kind, old
+  order); nothing selected: Split + disabled Delete. Still to port:
+  replace, crop, freeze, reverse, extract audio, rotate…*
+- [~] Keyframe ◇. *Shown disabled until keyframes are editable.*
+- [x] Toggles: main-lane magnet (P), linkage, preview axis (S), snapping
+  (N), with toasts; remembered. *Preview axis and snapping have nothing to
+  act on yet (no skim, no drag).*
+- [x] Zoom to fit (⇧Z), zoom −/log slider/+ (⌘- / ⌘=, ×1.5, 4–400 px/s)
 
 ## Timeline
 
 - [x] Ruler with timecode ticks; scrub by click/drag; playhead line
 - [x] Lanes with clips, selection, wheel scroll, ⌘/ctrl-wheel zoom
-- [ ] Timecode readout at the top-left (`00:00 / 02:25`)
-- [ ] Lane headers: Cover button on the main lane; lock / eye / speaker /
-  "…" per lane (`SetLaneFlagCommand`)
-- [ ] Lane types and stacking: main video, overlay, text, captions, sticker,
-  effect, audio; add/remove lanes; vertical scroll
+- [x] Timecode readout at the top-left (`current / total`)
+- [~] Lane headers: name; lock / eye / speaker toggles (undoable). *No
+  Cover button, no "…" menu.*
+- [~] Lane stacking: other lanes above the main lane (highest order on
+  top), audio below; main 56 px, others 32 px, 6 px gaps. *No add/remove
+  lanes, no vertical scroll, no sub-rows for overlapping clips.*
+- [~] Clip colours per kind (old palette), deactivated / hidden-lane clips
+  dimmed, speed badge.
 - [ ] Clip visuals: filmstrip thumbnails, audio waveform, name, speed
   badge, mute icon, keyframe diamonds, beat dots
 - [ ] Transition seam button between main-lane clips (+ seam geometry)
 - [ ] Drag clips (within/between lanes), trim handles, ripple on main lane,
   snapping guides, drop from browser, edge auto-scroll
-- [ ] Multi-select, copy / cut / paste / duplicate (⌘C/X/V/D)
+- [~] Copy / cut / paste / duplicate (⌘C/X/V/D): in-app clipboard; paste on
+  the main lane goes in at the cut after the clip under the playhead.
+  *No multi-select.*
 - [ ] Context menus (clip, lane, empty area)
 - [ ] Skim (hover preview) if the old app has it (`timelineSkim.ts`)
 
 ## Edits + document
 
 - [x] Same JSON document as the app; unknown fields round-trip
-- [x] Append media, split, delete (main lane closes gap), speed (ripple)
-- [ ] Undo/redo history with one step per gesture (port the command list
-  in `src/stores/commands/`)
+- [x] Insert media at the playhead, split (reversed / freeze aware), delete,
+  speed, delete left/right (trims the source window like `trimmedSource`),
+  duplicate, paste, deactivate (clip `hidden`), lane flags, canvas ratio
+- [x] Main track magnet + linkage as one document function
+  (`model::with_magnet`, the old `withMagnet`): re-packs the main lane by
+  out-transition overlap and carries linked clips
+- [x] Undo/redo: document snapshots, one step per gesture (a quick run of
+  edits to the same thing merges, 400 ms, 200 steps). *Split doesn't yet
+  split keyframes / motion paths / speed curves per half.*
 - [ ] Keyframes, transforms, masks, crop, adjust, filters, effects,
   transitions, text, stickers, drawings, captions, audio volume/fades,
   speed curves, freeze, reverse (baked copy), extract audio
@@ -151,22 +196,35 @@ isn't listed.
 | --- | --- | --- |
 | Play/pause | Space | [x] |
 | Prev / next frame | ← / → | [x] |
-| Back / forward 1 s | ⇧← / ⇧→ | [ ] |
-| Prev / next edit point | ↑ / ↓ | [ ] |
-| Go to start / end | Home / End | [~] Home only |
-| Split | ⌘B | [~] bound to S (fix: S is preview axis) |
-| Delete left / right | Q / W | [ ] |
-| Deactivate clip | V | [ ] |
+| Back / forward 1 s | ⇧← / ⇧→ | [x] |
+| Prev / next edit point | ↑ / ↓ | [x] |
+| Go to start / end | Home / End | [x] |
+| Split | ⌘B | [x] |
+| Delete left / right | Q / W | [x] |
+| Deactivate clip | V | [x] |
 | Delete | ⌫ / Delete | [x] |
-| Duplicate / copy / cut / paste | ⌘D / ⌘C / ⌘X / ⌘V | [ ] |
-| Undo / redo | ⌘Z / ⌘⇧Z, ⌘Y | [ ] |
-| Deselect | Esc | [ ] |
-| Zoom in / out / fit | ⌘= / ⌘- / ⇧Z | [~] fit missing |
-| Preview axis / snapping / main magnet | S / N / P | [ ] |
-| Select tool / split tool | A / B | [ ] |
-| Fullscreen | ⌘⇧F | [ ] |
-| Export | ⌘E | [ ] |
-| Shortcuts dialog | ⌘/ | [ ] |
+| Duplicate / copy / cut / paste | ⌘D / ⌘C / ⌘X / ⌘V | [x] |
+| Undo / redo | ⌘Z / ⌘⇧Z, ⌘Y | [x] |
+| Deselect | Esc | [x] (full screen → split tool → popup → selection) |
+| Zoom in / out / fit | ⌘= / ⌘- / ⇧Z | [x] |
+| Preview axis / snapping / main magnet | S / N / P | [x] toggles; axis + snapping act on nothing yet |
+| Select tool / split tool | A / B | [x] |
+| Fullscreen | ⌘⇧F | [x] |
+| Export | ⌘E | [~] toast until export exists |
+| Shortcuts dialog | ⌘/ | [x] |
+
+All of them come from one table (`src/shortcuts.rs`): key bindings, menu
+items, tooltips and the dialog.
+
+## Still to build next (in order)
+
+1. A native single-line text field (GPUI has none built in): project
+   rename, editable number fields, search, text clips.
+2. Timeline interaction: drag / trim clips, snapping guides, drop from the
+   library, context menus, vertical lane scroll, filmstrip + waveform.
+3. Inspector panels on the real document fields: Basic (transform,
+   opacity), Volume, Rotate, Background, Adjust.
+4. Audio playback, then the compositor (all layers), then export.
 
 ## Platform
 

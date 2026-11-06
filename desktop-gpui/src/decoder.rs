@@ -60,6 +60,7 @@ pub fn probe(path: &str) -> anyhow::Result<MediaItem> {
         width,
         height,
         has_video: video.is_some(),
+        still: is_still,
     })
 }
 
@@ -295,4 +296,30 @@ fn serve(
         }
     }
     Ok(())
+}
+
+/// One small frame of `path` near `at` (a media tile's picture). Blocking:
+/// call it off the UI thread.
+pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<DecodedFrame> {
+    let mut dec = Decoder::open(path, max_width)?;
+    if at > 0 {
+        dec.seek(at)?;
+    }
+    let mut best = None;
+    while let Some((pts, frame)) = dec.next() {
+        let past = pts >= at;
+        best = Some((pts, frame));
+        if past {
+            break;
+        }
+    }
+    let (pts, frame) = best.ok_or_else(|| anyhow::anyhow!("no frame"))?;
+    let (width, height, bgra) = dec.frame_bgra(&frame)?;
+    Ok(DecodedFrame {
+        source: path.to_string(),
+        pts,
+        width,
+        height,
+        bgra,
+    })
 }

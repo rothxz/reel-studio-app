@@ -60,14 +60,24 @@ tools/shot.sh out.png  # screenshot the app window without focusing it
 ## Architecture (current)
 
 ```
-src/main.rs      window, menus, global key bindings (actions!)
-src/editor.rs    Editor view: header, library, player, inspector, timeline
-src/model.rs     Project document (serde): same JSON as the app; unknown fields
-                 kept in `extra` so nothing a later feature needs is lost
-src/engine.rs    Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
-src/decoder.rs   FFmpeg probe + one decode thread per source → BGRA frames
-src/theme.rs     palette
-engine-shim/     C ABI over videoengine::Engine (+ FindActiveClips etc.)
+src/main.rs        window, fonts, app menu (built from the shortcut table)
+src/editor.rs      Editor state: document, edits (+ magnet), undo, playback,
+                   preview, drags, panel layout, projects session, autosave
+src/shortcuts.rs   the shortcut table → key bindings, menu, tooltips, dialog
+src/history.rs     undo / redo (document snapshots, coalesced per gesture)
+src/model.rs       Project document (serde): same JSON as the app; unknown fields
+                   kept in `extra`; clip edits + `with_magnet`
+src/projects.rs    projects folder: list / load / save (atomic) / delete
+src/prefs.rs       panel sizes + timeline switches, data folder
+src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
+src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source
+src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono)
+src/ui/            one file per panel, each `impl Editor { fn render_… }`:
+                   header, home, browser, player, inspector, toolbar,
+                   timeline, dialogs (popup, confirm, shortcuts), widgets,
+                   icons (icon fonts served as SVG)
+engine-shim/       C ABI over videoengine::Engine (+ FindActiveClips etc.)
+assets/fonts/      bundled fonts + licences
 ```
 
 Data flow mirrors the app's: **the `Project` document is the source of
@@ -79,10 +89,11 @@ visible at t" with source times resolved (speed, curves, reverse, freeze),
 never project data. Preview frames come from `decoder.rs` threads, requested
 latest-wins, delivered over an async channel to the UI.
 
-Planned split as it grows (keep `editor.rs` from becoming one file):
-`src/ui/{header,browser,player,inspector,timeline}/`, `src/model/` (document
-+ edit commands with undo), `src/media/` (decode, thumbnails, waveform,
-audio out), `src/engine/`.
+Every edit goes through `Editor::edit(label, magnet, coalesce, f)`: it
+snapshots the document for undo, applies `f`, runs the main-track magnet
+when asked, marks the project dirty (autosave in 1.5 s) and commits. Next
+split as it grows: `src/model/` (document + edits), `src/media/` (decode,
+thumbnails, waveform, audio out), and the editor state out of `editor.rs`.
 
 ## Porting map: old editor → source to read in `~/Project/reel-studio`
 
@@ -133,7 +144,19 @@ audio out), `src/engine/`.
 - Key bindings with a context (`Some("Editor")`) need the focused element
   inside `.key_context("Editor").track_focus(&focus)`. The root re-focuses
   on mouse down so shortcuts survive clicks.
-- No crate copy of `gpui-component` yet; it (0.9) is the planned widget set
+- GPUI's macOS text system **skips any font without an `m` glyph**, so
+  icon fonts never load as fonts. `ui/icons.rs` reads the glyph outlines
+  (ttf-parser) and serves them as SVG assets for `svg()`, which tints them
+  with `text_color`. Add an icon: its codepoint from the font's glyph map.
+- Mouse drags (splitters, sliders, scrub) are `Editor::drag`: the element
+  starts it on mouse down, the window root handles moves and the release,
+  so a drag keeps working off the element. Elements that need their bounds
+  (sliders, lanes, player area) record them with `Editor::measure(key)`.
+- Driving the app: cliclick `m:` sends plain moves (no button held), which
+  correctly ends a drag; use `dd:` / `dm:` / `du:` for drags, `rc:` for a
+  right click. `tools/shot.sh` captures the widest window of the process.
+- No crate copy of `gpui-component` yet (none offline, and the `gpui-kit`
+  crates in the registry target another gpui); it (0.9) is the planned widget set
   (inputs, sliders, select, tabs, dialogs, scroll areas). Check its API
   matches gpui 0.2.2 before adding it.
 

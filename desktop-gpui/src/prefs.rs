@@ -1,0 +1,82 @@
+//! Editor preferences that outlive a project: panel sizes and the timeline
+//! switches. Stored as JSON in the app's data folder, read once at launch
+//! and written when they change.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Prefs {
+    /// Left browser width; None = a share of the window.
+    pub browser_width: Option<f32>,
+    pub inspector_width: f32,
+    /// Timeline panel height; None = a share of the window.
+    pub timeline_height: Option<f32>,
+    pub main_track_magnet: bool,
+    pub linkage: bool,
+    pub preview_axis: bool,
+    pub snapping: bool,
+    /// Export resolution: index into `RESOLUTIONS`.
+    pub export_resolution: usize,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs {
+            browser_width: None,
+            inspector_width: 340.,
+            timeline_height: None,
+            main_track_magnet: true,
+            linkage: true,
+            preview_axis: true,
+            snapping: true,
+            export_resolution: 1,
+        }
+    }
+}
+
+/// Export resolutions offered in the header (label, short side scale).
+pub const RESOLUTIONS: [(&str, f32); 3] = [("720p", 720. / 1080.), ("1080p", 1.), ("4K", 2.)];
+
+/// The app's data folder (created on first use).
+pub fn data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let dir = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Reel Studio")
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or(home)
+            .join("Reel Studio")
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"))
+            .join("reel-studio")
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn path() -> PathBuf {
+    data_dir().join("desktop-editor.json")
+}
+
+impl Prefs {
+    pub fn load() -> Prefs {
+        std::fs::read_to_string(path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path(), json);
+        }
+    }
+}
