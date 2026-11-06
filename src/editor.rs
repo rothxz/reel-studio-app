@@ -25,7 +25,7 @@ use crate::projects;
 use crate::selection::Selection;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
-use crate::ui::timeline_edit::{ClipDrag, Marquee, MediaDrop};
+use crate::ui::timeline_edit::{ClipDrag, KeyframeDrag, Marquee, MediaDrop};
 
 actions!(
     editor,
@@ -112,6 +112,8 @@ pub enum Drag {
     Clip(Box<ClipDrag>),
     /// A rubber band over the lanes (⇧ / ⌘ + drag on empty space).
     Marquee(Box<Marquee>),
+    /// A keyframe diamond on the selected clip: a click seeks, a drag moves.
+    Keyframe(Box<KeyframeDrag>),
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -1574,6 +1576,7 @@ impl Editor {
             Drag::Scrub => self.scrub_to(e.position.x, cx),
             Drag::Clip(_) => self.update_clip_drag(e.position, cx),
             Drag::Marquee(_) => self.update_marquee(e.position, cx),
+            Drag::Keyframe(_) => self.update_keyframe_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Slider { key, apply } => {
                 let (key, apply) = (*key, apply.clone());
@@ -1623,6 +1626,7 @@ impl Editor {
                 self.live_value = None;
             }
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
+            Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
             _ => {}
         }
         cx.notify();

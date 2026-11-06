@@ -145,6 +145,75 @@ impl Clip {
         }
     }
 
+    /// The clip's keyframe times (clip-local, sorted): every enabled
+    /// property track's, with times closer than `eps` counted once (one
+    /// diamond on the timeline).
+    pub fn keyframe_times(&self, eps: Micros) -> Vec<Micros> {
+        let mut all: Vec<Micros> = self
+            .extra
+            .get("keyframes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|t| t.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+            .flat_map(|t| {
+                t.get("keyframes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|k| k.get("time").and_then(Value::as_f64))
+                    .map(|t| t.round() as Micros)
+            })
+            .collect();
+        all.sort_unstable();
+        let mut out: Vec<Micros> = vec![];
+        for t in all {
+            if out.last().is_none_or(|&last| t - last > eps) {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Moves the diamond at `from` to `to` (clamped to the clip) on every
+    /// property track: each track's keyframe within `eps` of `from` moves,
+    /// and one already at the new time gives way. False when none moved.
+    pub fn move_keyframe(&mut self, from: Micros, to: Micros, eps: Micros) -> bool {
+        let target = to.clamp(0, self.timeline_duration.max(0));
+        let Some(tracks) = self
+            .extra
+            .get_mut("keyframes")
+            .and_then(Value::as_array_mut)
+        else {
+            return false;
+        };
+        let time_of = |k: &Value| k.get("time").and_then(Value::as_f64).unwrap_or(0.);
+        let mut moved = false;
+        for track in tracks {
+            let Some(keys) = track.get_mut("keyframes").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let nearest = keys
+                .iter()
+                .enumerate()
+                .map(|(i, k)| (i, (time_of(k) - from as f64).abs()))
+                .filter(|&(_, d)| d <= eps as f64)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+            let Some(i) = nearest else { continue };
+            let mut key = keys.remove(i);
+            key["time"] = Value::from(target);
+            keys.retain(|k| (time_of(k) - target as f64).abs() > eps as f64);
+            let at = keys
+                .iter()
+                .position(|k| time_of(k) > target as f64)
+                .unwrap_or(keys.len());
+            keys.insert(at, key);
+            moved = true;
+        }
+        moved
+    }
+
     /// Clip volume, 1 = as recorded.
     pub fn volume(&self) -> f64 {
         self.extra
@@ -596,6 +665,14 @@ impl Project {
         track.clips.push(copy);
         self.recompute_duration();
         Some(id)
+    }
+
+    /// Drags a clip's keyframe diamond from `from` to `to` (clip-local).
+    pub fn move_keyframe(&mut self, clip_id: &str, from: Micros, to: Micros, eps: Micros) -> bool {
+        from != to
+            && self
+                .clip_mut(clip_id)
+                .is_some_and(|c| c.move_keyframe(from, to, eps))
     }
 
     pub fn set_clip_hidden(&mut self, clip_id: &str, hidden: bool) {
@@ -1147,5 +1224,27 @@ mod tests {
         let back: Value = serde_json::from_str(&p.to_json()).unwrap();
         assert_eq!(back["layerStack"], true);
         assert!(back["tracks"][0]["clips"][0]["keyframes"].is_object());
+    }
+
+    #[test]
+    fn keyframe_diamonds_merge_and_move_on_every_track() {
+        let mut c: Clip = serde_json::from_value(serde_json::json!({
+            "id": "k", "kind": "video", "timelineStart": 0, "timelineDuration": 5_000_000,
+            "keyframes": [
+                { "property": "a", "enabled": true, "keyframes": [
+                    { "time": 0, "value": 1 }, { "time": 2_000_000, "value": 2 } ] },
+                { "property": "b", "enabled": true, "keyframes": [
+                    { "time": 2_010_000, "value": 5 }, { "time": 4_000_000, "value": 6 } ] },
+                { "property": "c", "enabled": false, "keyframes": [ { "time": 3_000_000 } ] }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(c.keyframe_times(50_000), [0, 2_000_000, 4_000_000]);
+        assert!(c.move_keyframe(2_000_000, 3_500_000, 50_000));
+        assert_eq!(c.keyframe_times(50_000), [0, 3_500_000, 4_000_000]);
+        // Onto another diamond: the one there gives way; past the end clamps.
+        assert!(c.move_keyframe(3_500_000, 9_000_000, 50_000));
+        assert_eq!(c.keyframe_times(50_000), [0, 4_000_000, 5_000_000]);
+        assert!(!c.move_keyframe(1_000_000, 0, 50_000));
     }
 }

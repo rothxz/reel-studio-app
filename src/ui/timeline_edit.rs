@@ -109,6 +109,28 @@ pub struct Marquee {
     base: Selection,
 }
 
+/// Keyframes closer than this are one diamond (the old editor's 50 ms).
+pub const KEYFRAME_TIME_EPSILON: Micros = 50_000;
+
+/// How close (micros) the playhead must be to a diamond to be "on" it:
+/// 50 ms, or 8 px at this zoom when that's more.
+pub fn keyframe_eps(pps: f32) -> Micros {
+    KEYFRAME_TIME_EPSILON.max((8. / pps * SECOND as f32) as Micros)
+}
+
+/// A keyframe diamond pressed on the selected clip.
+pub struct KeyframeDrag {
+    pub clip_id: String,
+    /// The diamond's time (clip-local) when pressed, and where it is now.
+    pub from: Micros,
+    pub live: Micros,
+    origin: Point<Pixels>,
+    origin_scroll: f32,
+    pub started: bool,
+    duration: Micros,
+    targets: Vec<Micros>,
+}
+
 /// Where a file dragged over the timeline would land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MediaDrop {
@@ -434,6 +456,90 @@ impl Editor {
             }
         }
         cx.notify();
+    }
+
+    // ---- keyframe diamonds ---------------------------------------------------
+
+    /// A press on the diamond at clip-local `time`.
+    pub fn start_keyframe_drag(
+        &mut self,
+        clip_id: &str,
+        time: Micros,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_, clip)) = self.project.find_clip(clip_id) else {
+            return;
+        };
+        // It snaps to the clip's edges, the playhead and the other diamonds.
+        let eps = keyframe_eps(self.pps);
+        let mut targets = vec![];
+        if self.prefs.snapping {
+            targets.extend([
+                0,
+                clip.timeline_duration,
+                self.playhead - clip.timeline_start,
+            ]);
+            targets.extend(
+                clip.keyframe_times(eps)
+                    .into_iter()
+                    .filter(|&k| (k - time).abs() > eps),
+            );
+            targets.retain(|&t| (0..=clip.timeline_duration).contains(&t));
+        }
+        let duration = clip.timeline_duration;
+        self.end_hover();
+        self.drag = Some(Drag::Keyframe(Box::new(KeyframeDrag {
+            clip_id: clip_id.to_string(),
+            from: time,
+            live: time,
+            origin: at,
+            origin_scroll: self.scroll_x,
+            started: false,
+            duration,
+            targets,
+        })));
+        cx.notify();
+    }
+
+    pub fn update_keyframe_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(Drag::Keyframe(mut d)) = self.drag.take() else {
+            return;
+        };
+        let dx = f32::from(at.x - d.origin.x) + (self.scroll_x - d.origin_scroll);
+        d.started |= dx.abs() >= MOVE_THRESHOLD;
+        if d.started {
+            let t = d.from + (dx / self.pps * SECOND as f32) as Micros;
+            let t = snap(t, &d.targets, self.snap_threshold()).unwrap_or(t);
+            d.live = t.clamp(0, d.duration);
+        }
+        self.drag = Some(Drag::Keyframe(d));
+        cx.notify();
+    }
+
+    /// A click puts the playhead on the diamond; a drag moves it (one undo
+    /// step, every property's keyframe there).
+    pub fn commit_keyframe_drag(&mut self, d: KeyframeDrag, cx: &mut Context<Self>) {
+        let Some(start) = self
+            .project
+            .find_clip(&d.clip_id)
+            .map(|(_, c)| c.timeline_start)
+        else {
+            return;
+        };
+        if !d.started {
+            self.pause();
+            self.seek(start + d.from, cx);
+            return;
+        }
+        let (id, from, to) = (d.clip_id.clone(), d.from, d.live);
+        self.edit(
+            "Move Keyframe",
+            false,
+            None,
+            |p| p.move_keyframe(&id, from, to, KEYFRAME_TIME_EPSILON),
+            cx,
+        );
     }
 
     // ---- rubber band ---------------------------------------------------------

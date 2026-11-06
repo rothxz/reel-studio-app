@@ -173,7 +173,13 @@ isn't listed.
   audio (FFmpeg peaks, clip volume), name + length strip on pictures,
   speed badge, lock / mute badges, hover outline, white selection outline,
   deactivated / hidden lanes dimmed. *Filmstrip ignores speed curves; no
-  keyframe diamonds or beat dots yet.*
+  beat dots yet.*
+- [x] Keyframe diamonds on the selected clip: one ◆ per keyframe time
+  (enabled property tracks, 50 ms merged, thinned to one per 12 px), on
+  the clip's middle; the one under the playhead red. Click = playhead onto
+  it; drag = move it on every property track (snaps to the clip's edges,
+  the playhead and the other diamonds; one undo step; a diamond already
+  there gives way). *No Graphs badge, no tracked-path diamonds yet.*
 - [x] Transition seams: boxes meet mid-overlap; a button between main
   clips (opens the browser's Transitions tab, which isn't ported yet)
 - [x] Drag clips: press-drag moves (selects it); the old slot stays as a
@@ -269,7 +275,7 @@ items, tooltips and the dialog.
 
 1. A native single-line text field (GPUI has none built in): project
    rename, editable number fields, search, text clips.
-2. Timeline leftovers: keyframe diamonds, beat dots; the cover editor.
+2. Timeline leftovers: beat dots; the cover editor.
 3. Inspector panels on the real document fields: Basic (transform,
    opacity), Volume, Rotate, Background, Adjust.
 4. Audio playback, then the compositor (all layers), then export.

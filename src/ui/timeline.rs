@@ -25,7 +25,9 @@ use crate::editor::{Drag, Editor, Tool, timecode};
 use crate::model::{Clip, Micros, Project, SECOND, Side, Track, TrackType};
 use crate::theme;
 use crate::ui::icons::Icon;
-use crate::ui::timeline_edit::{ClipDragMode, MediaDrag, MediaDrop};
+use crate::ui::timeline_edit::{
+    ClipDragMode, KEYFRAME_TIME_EPSILON, MediaDrag, MediaDrop, keyframe_eps,
+};
 use crate::ui::widgets::{icon_button, mono};
 
 // ---- geometry (y from the top of the lane area) ------------------------------
@@ -64,6 +66,9 @@ const TILE_GRID: [Micros; 10] = [
 ];
 /// Keeps a snapped frame off the segment's exclusive end.
 const SEGMENT_END_GUARD: Micros = 33_333;
+/// A keyframe diamond's size, and its press target.
+const DIAMOND: f32 = 12.;
+const DIAMOND_HIT: f32 = 20.;
 /// Waveform column spacing (px).
 const WAVE_STEP: f32 = 2.;
 
@@ -1329,6 +1334,11 @@ impl Editor {
                 )
         };
         let (down_id, menu_id) = (id.clone(), id.clone());
+        let diamonds = if selected && !g.moving {
+            self.keyframe_diamonds(clip, -g.inset.0, g.h, cx)
+        } else {
+            vec![]
+        };
 
         div()
             .id(SharedString::from(format!("clip-{id}")))
@@ -1370,6 +1380,7 @@ impl Editor {
                         .child(Icon::VolumeMute.el(10., theme::text())),
                 )
             })
+            .children(diamonds)
             .when(handles, |d| {
                 d.child(handle(Side::Start, cx))
                     .child(handle(Side::End, cx))
@@ -1418,6 +1429,97 @@ impl Editor {
                 }),
             )
             .into_any_element()
+    }
+
+    /// The selected clip's keyframe diamonds (box x = `shift` + time), on
+    /// its vertical middle; the one under the playhead is red. Diamonds
+    /// closer than one diamond apart show as the first of the run.
+    fn keyframe_diamonds(
+        &self,
+        clip: &Clip,
+        shift: f32,
+        h: f32,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let pps = self.pps;
+        let mut times: Vec<Micros> = vec![];
+        for t in clip.keyframe_times(KEYFRAME_TIME_EPSILON) {
+            let close = times
+                .last()
+                .is_some_and(|&last| (t - last) as f32 / SECOND as f32 * pps < DIAMOND);
+            if !close {
+                times.push(t);
+            }
+        }
+        if times.is_empty() {
+            return vec![];
+        }
+        let dragged = match &self.drag {
+            Some(Drag::Keyframe(d)) if d.clip_id == clip.id && d.started => Some((d.from, d.live)),
+            _ => None,
+        };
+        let local = self.playhead - clip.timeline_start;
+        let eps = keyframe_eps(pps);
+        let active = (0..=clip.timeline_duration)
+            .contains(&local)
+            .then(|| {
+                times
+                    .iter()
+                    .copied()
+                    .filter(|t| (t - local).abs() <= eps)
+                    .min_by_key(|t| (t - local).abs())
+            })
+            .flatten();
+        let mut out: Vec<(bool, AnyElement)> = times
+            .into_iter()
+            .map(|t| {
+                let shown = match dragged {
+                    Some((from, live)) if from == t => live,
+                    _ => t,
+                };
+                let on = active == Some(t) && dragged.is_none();
+                let x = shift + shown as f32 / SECOND as f32 * pps;
+                let id = clip.id.clone();
+                let (outer, inner) = if on {
+                    (theme::text(), theme::danger())
+                } else {
+                    (rgba(0x0000008c), theme::text())
+                };
+                let el = div()
+                    .id(SharedString::from(format!("kf-{}-{t}", clip.id)))
+                    .absolute()
+                    .left(px(x - DIAMOND_HIT / 2.))
+                    .top(px(h / 2. - DIAMOND_HIT / 2.))
+                    .size(px(DIAMOND_HIT))
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ed, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ed.start_keyframe_drag(&id, t, e.position, cx);
+                        }),
+                    )
+                    .child(
+                        Icon::Rhombus
+                            .el(DIAMOND + 3., outer)
+                            .absolute()
+                            .left(px((DIAMOND_HIT - DIAMOND - 3.) / 2.))
+                            .top(px((DIAMOND_HIT - DIAMOND - 3.) / 2.)),
+                    )
+                    .child(
+                        Icon::Rhombus
+                            .el(DIAMOND - 2., inner)
+                            .absolute()
+                            .left(px((DIAMOND_HIT - DIAMOND + 2.) / 2.))
+                            .top(px((DIAMOND_HIT - DIAMOND + 2.) / 2.)),
+                    )
+                    .into_any_element();
+                (on, el)
+            })
+            .collect();
+        // The red one draws over its neighbours.
+        out.sort_by_key(|(on, _)| *on);
+        out.into_iter().map(|(_, e)| e).collect()
     }
 
     /// An audio clip's waveform: one bar per `WAVE_STEP` px, the loudest
