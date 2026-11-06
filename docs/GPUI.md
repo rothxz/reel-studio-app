@@ -2,10 +2,10 @@
 
 Can the desktop editor leave Electron for a native Rust app built on
 [GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor)? This
-folder is a working spike that tries to answer that. It is **not** the shipping
+branch is a working spike that tries to answer that. It is **not** the shipping
 desktop app. Releases on this repo are still the Electron build.
 
-![The spike: media library, player, inspector and timeline](docs/screenshot.jpg)
+![The spike: media library, player, inspector and timeline](screenshot.jpg)
 
 ## What it does
 

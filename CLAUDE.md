@@ -4,14 +4,15 @@ This repo has two jobs:
 
 1. **Public home of the desktop app**: `README.md`, `docs/images/`, and the
    GitHub Releases the Electron build publishes to (`main` branch).
-2. **The native rewrite**: `desktop-gpui/`, a Rust app on GPUI (the UI
-   framework behind the Zed editor) that will replace the Electron shell.
-   Work happens on the `gpui-experiment` branch.
+2. **The native rewrite**: a Rust app on GPUI (the UI framework behind the
+   Zed editor) that will replace the Electron shell. On the
+   `gpui-experiment` branch the Cargo crate sits at the repo root, next to
+   the public `README.md` / `docs/images/`; its own write-up is
+   `docs/GPUI.md`.
 
 **Goal:** match the current desktop editor's UI and behaviour (the web
 editor that Electron wraps) in native Rust, panel by panel. Track progress
-in `desktop-gpui/docs/PARITY.md`: tick items off there, and add any gaps
-you find.
+in `docs/PARITY.md`: tick items off there, and add any gaps you find.
 
 Workspace: open `~/Project/reel-studio-desktop.code-workspace`. It holds this
 repo and **`~/Project/reel-studio`**, the private app repo, which is the
@@ -37,7 +38,6 @@ own `CLAUDE.md` is its codebase map.
 ## Build, run, verify
 
 ```sh
-cd desktop-gpui
 cargo dev [files…]     # = run --release --features cpp-engine (see .cargo/config.toml)
 cargo t                # tests on the C++ engine backend
 cargo test             # tests on the Rust stand-in (what CI without the engine can run)
@@ -46,7 +46,7 @@ tools/shot.sh out.png  # screenshot the app window without focusing it
 ```
 
 - `.cargo/config.toml` points `REEL_ENGINE_DIR` at
-  `../../reel-studio/modules/video-engine/cpp` (an exported variable wins).
+  `../reel-studio/modules/video-engine/cpp` (an exported variable wins).
   `build.rs` compiles every `cpp/src/*.cpp` + the shim with `cc`.
 - Needs Homebrew `ffmpeg` (9.x, matched by `ffmpeg-next = 9`) and `pkg-config`.
 - A clean build takes minutes (GPUI is big); incremental is ~10 s.
