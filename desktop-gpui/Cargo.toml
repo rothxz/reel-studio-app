@@ -1,0 +1,20 @@
+[package]
+name = "reel-studio-gpui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+async-channel = "2.5.0"
+ffmpeg-next = "9"
+gpui = "0.2.2"
+image = "0.25"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[build-dependencies]
+cc = "1.11.1"
+
+[features]
+# Link the shared C++ engine core from the main repo (needs REEL_ENGINE_DIR).
+cpp-engine = []
