@@ -618,6 +618,12 @@ impl Project {
             .find(|t| t.clips.iter().any(|c| c.id == clip_id))
     }
 
+    /// Runs `f` on the clip; false when there's no such clip or `f` says
+    /// it changed nothing.
+    pub fn update_clip(&mut self, clip_id: &str, f: impl FnOnce(&mut Clip) -> bool) -> bool {
+        self.clip_mut(clip_id).is_some_and(f)
+    }
+
     fn clip_mut(&mut self, clip_id: &str) -> Option<&mut Clip> {
         self.tracks
             .iter_mut()

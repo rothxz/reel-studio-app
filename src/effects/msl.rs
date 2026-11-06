@@ -346,3 +346,199 @@ mod tests {
         assert_eq!(translate("S(1)", None), "S(1)");
     }
 }
+
+/// Places one picture on the canvas over what's below it (`ComposeUniforms`
+/// in metal.rs): texture 0 is the canvas so far, texture 1 the picture
+/// after its own looks. For each canvas pixel the clip's transform is run
+/// backwards to a point in its frame; outside the frame the canvas shows
+/// through. The frame point is mirrored, then cropped into the source;
+/// the shape mask is measured in the same (mirrored) frame space, in frame
+/// heights so a turned mask stays true on a wide frame. The picture's
+/// alpha × mask × opacity mixes the Splice blend of the two over the
+/// canvas (the W3C separable blend formulas).
+pub fn compose() -> String {
+    format!("{COMMON}{COMPOSE}")
+}
+
+/// A one-direction Gaussian blur (run across, then down): `u.dir` the uv
+/// step of one pixel, `u.sigma.x` the sigma in pixels.
+pub fn blur() -> String {
+    format!(
+        "{COMMON}
+struct BlurUniforms {{
+    float4 dir;
+    float4 sigma;
+}};
+
+fragment float4 fx_fragment(FxVaryings in [[stage_in]], texture2d<float> src [[texture(0)]],
+                            sampler smp [[sampler(0)]], constant BlurUniforms &u [[buffer(0)]]) {{
+    float sigma = max(u.sigma.x, 0.5);
+    // 24 taps a side spread over 3 sigma (linear sampling fills between).
+    float step = max(sigma * 3.0 / 24.0, 1.0);
+    float4 sum = float4(0.0);
+    float total = 0.0;
+    for (int i = -24; i <= 24; i++) {{
+        float d = float(i) * step;
+        float w = exp(-0.5 * (d * d) / (sigma * sigma));
+        sum += src.sample(smp, in.uv + u.dir.xy * d) * w;
+        total += w;
+    }}
+    return sum / total;
+}}
+"
+    )
+}
+
+const COMPOSE: &str = r#"
+struct ComposeUniforms {
+    float4 canvas;  // width, height (px), frame aspect (w / h), blend mode
+    float4 place;   // centre x, y (px), shown width, height (px)
+    float4 turn;    // cos, sin of the clockwise turn, opacity, flags
+    float4 crop;    // x, y, width, height in the source, 0..1
+    float4 mask0;   // centre x, y, width, height (frame units)
+    float4 mask1;   // cos, sin of the mask's turn, feather, shape
+};
+
+// Flags in turn.w.
+constant int MIRROR_X = 1;
+constant int MIRROR_Y = 2;
+constant int HAS_MASK = 4;
+constant int INVERT = 8;
+
+// Signed distance to a heart (lobes up, tip at the origin, about 1 tall).
+static float cm_heart(float2 p) {
+    p.x = abs(p.x);
+    if (p.x + p.y > 1.0) {
+        return length(p - float2(0.25, 0.75)) - sqrt(2.0) / 4.0;
+    }
+    float2 a = p - float2(0.0, 1.0);
+    float t = 0.5 * max(p.x + p.y, 0.0);
+    float2 b = p - float2(t);
+    return sqrt(min(dot(a, a), dot(b, b))) * sign(p.x - p.y);
+}
+
+// Signed distance to a five-point star of outer radius 1, a tip up:
+// folded into one tenth of the star by its mirror lines, then the
+// distance to the edge from the tip to the inner corner.
+static float cm_star(float2 p) {
+    const float2 k = float2(0.809016994375, -0.587785252292);  // cos 36, -sin 36
+    p.x = abs(p.x);
+    p -= 2.0 * max(dot(k, p), 0.0) * k;
+    p -= 2.0 * max(dot(float2(-k.x, k.y), p), 0.0) * float2(-k.x, k.y);
+    p.x = abs(p.x);
+    p.y -= 1.0;
+    const float inner = 0.46;
+    float2 edge = float2(-inner * k.y, inner * k.x - 1.0);
+    float h = clamp(dot(p, edge) / dot(edge, edge), 0.0, 1.0);
+    return length(p - edge * h) * sign(p.y * edge.x - p.x * edge.y);
+}
+
+// 0 (hidden) .. 1 (shown) at frame point `uv` (0..1, y down).
+static float cm_mask(constant ComposeUniforms &u, float2 uv) {
+    float aspect = u.canvas.z;
+    float2 d = float2((uv.x - u.mask0.x) * aspect, uv.y - u.mask0.y);
+    float c = u.mask1.x;
+    float s = u.mask1.y;
+    float2 p = float2(c * d.x + s * d.y, -s * d.x + c * d.y);
+    float hx = max(u.mask0.z * 0.5 * aspect, 1e-4);
+    float hy = max(u.mask0.w * 0.5, 1e-4);
+    int shape = int(u.mask1.w + 0.5);
+    float sd;
+    if (shape == 0) {
+        // Horizontal: the half above the line.
+        sd = p.y;
+    } else if (shape == 1) {
+        // Mirror: a band `height` thick.
+        sd = abs(p.y) - hy;
+    } else if (shape == 2) {
+        sd = (length(p / float2(hx, hy)) - 1.0) * min(hx, hy);
+    } else if (shape == 3) {
+        float2 q = abs(p) - float2(hx, hy);
+        sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+    } else if (shape == 4) {
+        // The heart's box: half-width 0.6036, height 1.1036 in its units.
+        float2 q = float2(p.x / hx, -p.y / hy);
+        sd = cm_heart(float2(q.x * 0.6036, (q.y * 0.5 + 0.5) * 1.1036)) * min(hx, hy) / 0.58;
+    } else {
+        // The star's box: half-width sin 72, half-height (1 + cos 36) / 2.
+        float2 q = float2(p.x / hx * 0.9511, -p.y / hy * 0.9045 + 0.0955);
+        sd = cm_star(q) * min(hx, hy) / 0.9278;
+    }
+    float soft = shape == 0 ? 0.5 : min(hx, hy);
+    float w = max(u.mask1.z * soft, 0.0015);
+    float t = clamp(0.5 - sd / (2.0 * w), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+static float cm_soft(float b, float s) {
+    if (s <= 0.5) return b - (1.0 - 2.0 * s) * b * (1.0 - b);
+    float d = b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : sqrt(b);
+    return b + (2.0 * s - 1.0) * (d - b);
+}
+
+static float cm_burn(float b, float s) {
+    if (b >= 1.0) return 1.0;
+    if (s <= 0.0) return 0.0;
+    return 1.0 - min(1.0, (1.0 - b) / s);
+}
+
+static float cm_dodge(float b, float s) {
+    if (b <= 0.0) return 0.0;
+    if (s >= 1.0) return 1.0;
+    return min(1.0, b / (1.0 - s));
+}
+
+// Hard light: multiply where the picture is dark, screen where it's light.
+static float3 cm_hard(float3 b, float3 s) {
+    float3 s2 = 2.0 * s;
+    return select(b + (s2 - 1.0) - b * (s2 - 1.0), b * s2, s <= 0.5);
+}
+
+// Backdrop `b`, picture `s` (straight colour) -> the mode's colour.
+static float3 cm_blend(int mode, float3 b, float3 s) {
+    switch (mode) {
+        case 1: return min(b, s);                          // darken
+        case 2: return max(b, s);                          // lighten
+        case 3: return b + s - b * s;                      // filter (screen)
+        case 4: return cm_hard(s, b);                      // overlay
+        case 5: return cm_hard(b, s);                      // hard light
+        case 6: return float3(cm_soft(b.r, s.r), cm_soft(b.g, s.g), cm_soft(b.b, s.b));
+        case 7: return b * s;                              // burn (multiply)
+        case 8: return float3(cm_burn(b.r, s.r), cm_burn(b.g, s.g), cm_burn(b.b, s.b));
+        case 9: return float3(cm_dodge(b.r, s.r), cm_dodge(b.g, s.g), cm_dodge(b.b, s.b));
+        case 10: return b + s - 2.0 * b * s;               // slide (exclusion)
+        default: return s;
+    }
+}
+
+fragment float4 fx_fragment(FxVaryings in [[stage_in]], texture2d<float> below [[texture(0)]],
+                            texture2d<float> picture [[texture(1)]], sampler smp [[sampler(0)]],
+                            constant ComposeUniforms &u [[buffer(0)]]) {
+    float4 under = below.sample(smp, in.uv);
+    // Canvas pixel -> the frame, undoing the move and the clockwise turn.
+    float2 p = in.uv * u.canvas.xy - u.place.xy;
+    float c = u.turn.x;
+    float s = u.turn.y;
+    float2 q = float2(c * p.x + s * p.y, -s * p.x + c * p.y);
+    float2 f = q / u.place.zw + 0.5;
+    // Half a pixel of soft edge, so a turned frame isn't jagged.
+    float2 inset = (0.5 - abs(f - 0.5)) * u.place.zw;
+    float inside = clamp(min(inset.x, inset.y) + 0.5, 0.0, 1.0);
+    if (inside <= 0.0) return under;
+    int flags = int(u.turn.w + 0.5);
+    if (flags & MIRROR_X) f.x = 1.0 - f.x;
+    if (flags & MIRROR_Y) f.y = 1.0 - f.y;
+    f = clamp(f, 0.0, 1.0);
+    float4 pic = fx_straight(picture.sample(smp, u.crop.xy + f * u.crop.zw));
+    float cover = 1.0;
+    if (flags & HAS_MASK) {
+        cover = cm_mask(u, f);
+        if (flags & INVERT) cover = 1.0 - cover;
+    }
+    float a = pic.a * cover * u.turn.z * inside;
+    float4 back = fx_straight(under);
+    float3 mixed = cm_blend(int(u.canvas.w + 0.5), back.rgb, pic.rgb);
+    // The canvas below is opaque (it starts as a solid colour).
+    return float4(mix(back.rgb, clamp(mixed, 0.0, 1.0), a), 1.0);
+}
+"#;

@@ -12,6 +12,7 @@ mod selection;
 mod shortcuts;
 mod theme;
 mod ui;
+mod visual;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds,

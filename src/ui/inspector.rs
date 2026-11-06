@@ -23,6 +23,9 @@ pub struct Entry {
     pub label: &'static str,
     /// Only for a clip on the main lane (Background).
     pub main_lane: bool,
+    /// Only for a clip on an overlay video lane (Splice blends with what's
+    /// under it; the main lane has nothing under it).
+    pub overlay: bool,
 }
 
 pub struct Tab {
@@ -35,6 +38,7 @@ const fn e(key: &'static str, label: &'static str) -> Entry {
         key,
         label,
         main_lane: false,
+        overlay: false,
     }
 }
 
@@ -45,11 +49,13 @@ const VISUAL_CLIP: Tab = Tab {
         e("rotate", "Rotate"),
         e("removeBg", "Remove BG"),
         e("mask", "Mask"),
-        e("splice", "Splice"),
         Entry {
-            key: "background",
-            label: "Background",
+            overlay: true,
+            ..e("splice", "Splice")
+        },
+        Entry {
             main_lane: true,
+            ..e("background", "Background")
         },
     ],
 };
@@ -174,7 +180,8 @@ impl Editor {
         match self.selected_clip() {
             Some((track, clip)) => {
                 let main = self.project.is_main_track(&track.id);
-                self.render_clip_inspector(clip, main, cx)
+                let overlay = track.is_overlay_video(&self.project.id);
+                self.render_clip_inspector(clip, main, overlay, cx)
                     .into_any_element()
             }
             None => self.render_details(cx).into_any_element(),
@@ -261,6 +268,7 @@ impl Editor {
         &self,
         clip: &Clip,
         main_lane: bool,
+        overlay: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let tabs: Vec<(&Tab, Vec<&Entry>)> = tabs_for(&clip.kind)
@@ -270,7 +278,7 @@ impl Editor {
                     t,
                     t.entries
                         .iter()
-                        .filter(|e| !e.main_lane || main_lane)
+                        .filter(|e| (!e.main_lane || main_lane) && (!e.overlay || overlay))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -342,6 +350,12 @@ impl Editor {
 
         let body = match current {
             Some("speed") => self.render_speed_panel(clip, cx).into_any_element(),
+            Some("basic") => self.render_basic_panel(clip, cx),
+            Some("rotate") => self.render_rotate_panel(clip, main_lane, cx),
+            Some("removeBg") => self.render_cutout_panel(clip, cx),
+            Some("mask") => self.render_mask_panel(clip, cx),
+            Some("splice") => self.render_splice_panel(clip, cx),
+            Some("background") => self.render_background_panel(clip, cx),
             Some("effects") => self.render_effect_settings(cx),
             Some(key) => {
                 let label = tabs

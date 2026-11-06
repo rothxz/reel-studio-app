@@ -1,18 +1,23 @@
-//! What the player draws at a time, as render passes: the shown clip's own
-//! looks, then the effect-lane clips over the whole canvas.
+//! What the player draws at a time: every visible picture (back to front)
+//! with its own looks and its place on the canvas, then the effect-lane
+//! clips over the whole canvas.
 //!
-//! Per clip (the order export shades a clip in): its video effect if it
+//! Per picture (the order export shades a clip in): its video effect if it
 //! distorts, its filter (a Classic look's colour matrix, or a packaged
 //! filter's shader mixed by its intensity), then its video effect if it's
-//! laid over the picture. Then, over the canvas (the clip fitted into it on
-//! the background colour), every effect-lane clip under the playhead, lane
-//! order. Effects and filters at intensity 0, switched off, on a
-//! deactivated clip or a hidden lane are skipped.
+//! laid over the picture. Then it's placed on the canvas: crop, mirror /
+//! flip, transform, shape mask, opacity and Splice blend over what's
+//! below. Under everything, the canvas colour, or the main clip's
+//! Background (a colour, a photo, or its own picture blurred). Then every
+//! effect-lane clip under the playhead, lane order. Effects and filters at
+//! intensity 0, switched off, on a deactivated clip or a hidden lane are
+//! skipped.
 
 use std::sync::Arc;
 
 use crate::catalog::{self, EFFECT_PREFIX, FILTER_PREFIX};
 use crate::model::{Clip, EffectInstance, Micros, Project, SECOND, TrackType};
+use crate::visual::Background;
 
 use super::package::{EffectKind, EffectPackage, Lookup, Packages};
 
@@ -44,27 +49,105 @@ pub enum Pass {
     },
 }
 
-/// The canvas the global effects run over.
+/// A clip's shape mask, as the compose pass reads it (see
+/// `visual::ClipMask`; `shape` in `MaskShape::ALL` order).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaskPlan {
+    pub shape: u32,
+    pub center: [f32; 2],
+    pub size: [f32; 2],
+    /// Degrees, clockwise.
+    pub rotation: f32,
+    pub feather: f32,
+    pub invert: bool,
+}
+
+/// Where and how a picture lands on the canvas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placement {
+    /// Centre offset in canvas widths / heights (+y down).
+    pub x: f32,
+    pub y: f32,
+    /// Over the contain-fit.
+    pub scale: f32,
+    /// Degrees, clockwise.
+    pub rotation: f32,
+    pub opacity: f32,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    /// The visible part of the source, 0–1: x, y, width, height.
+    pub crop: [f32; 4],
+    pub mask: Option<MaskPlan>,
+    /// Splice: index in `visual::BLEND_MODES` (0 normal).
+    pub blend: u32,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Placement {
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+            rotation: 0.,
+            opacity: 1.,
+            flip_x: false,
+            flip_y: false,
+            crop: [0., 0., 1., 1.],
+            mask: None,
+            blend: 0,
+        }
+    }
+}
+
+impl Placement {
+    /// Contain-fit as it is: nothing to compose.
+    pub fn is_plain(&self) -> bool {
+        *self == Placement::default()
+    }
+}
+
+/// One picture: its looks (at its own size), then its place.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerPlan {
+    pub passes: Vec<Pass>,
+    pub place: Placement,
+}
+
+/// What's under the pictures besides the canvas colour.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Backdrop {
+    /// Layer `layer`'s picture covering the canvas, blurred by `sigma` (a
+    /// fraction of the canvas's short side).
+    Blur { layer: usize, sigma: f32 },
+    /// A photo (its path) covering the canvas.
+    Image(String),
+}
+
+/// The canvas the pictures are composed on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanvasPasses {
     pub width: u32,
     pub height: u32,
     /// Straight RGBA 0–1.
     pub background: [f32; 4],
+    pub backdrop: Option<Backdrop>,
+    /// The effect-lane clips, over everything.
     pub passes: Vec<Pass>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stack {
-    /// On the clip's frame, at its own size.
-    pub clip: Vec<Pass>,
-    /// Over the canvas; None when no effect-lane clip is on.
+    /// Back to front.
+    pub layers: Vec<LayerPlan>,
+    /// None: one picture as it is (through its own looks, at its own
+    /// size), contain-fitted by the player.
     pub canvas: Option<CanvasPasses>,
 }
 
 impl Stack {
+    /// Nothing for the GPU: the one picture shows as it was decoded.
     pub fn is_empty(&self) -> bool {
-        self.clip.is_empty() && self.canvas.is_none()
+        self.canvas.is_none() && self.layers.iter().all(|l| l.passes.is_empty())
     }
 }
 
@@ -190,23 +273,39 @@ fn is_distortion(p: &Pass) -> bool {
     matches!(p, Pass::Effect { package, .. } if package.kind == EffectKind::Distortion)
 }
 
-/// The passes for `shown` (the clip the player draws) at `t`, on a canvas
-/// `canvas_px` pixels big.
+/// Gaussian sigma of each Background blur strength, as a fraction of the
+/// canvas's short side (the old editor's four tiles).
+pub fn blur_sigma(level: u8) -> f32 {
+    match level {
+        1 => 0.012,
+        2 => 0.028,
+        3 => 0.05,
+        _ => 0.08,
+    }
+}
+
+/// The plan for the pictures under the preview time `t` (back to front,
+/// each with its placement there) on a canvas `canvas_px` pixels big.
 pub fn build(
     project: &Project,
-    shown: Option<&Clip>,
+    layers: &[(&Clip, Placement)],
     t: Micros,
     canvas_px: (u32, u32),
     src: &Sources,
     needs: &mut Needs,
 ) -> Stack {
     let mut stack = Stack::default();
-    if let Some(clip) = shown {
+    for (clip, place) in layers {
+        let mut passes = vec![];
         let effect = effect_pass(clip, t, src, needs);
         let (before, after): (Vec<Pass>, Vec<Pass>) = effect.into_iter().partition(is_distortion);
-        stack.clip.extend(before);
-        stack.clip.extend(filter_pass(clip, src, needs));
-        stack.clip.extend(after);
+        passes.extend(before);
+        passes.extend(filter_pass(clip, src, needs));
+        passes.extend(after);
+        stack.layers.push(LayerPlan {
+            passes,
+            place: place.clone(),
+        });
     }
 
     let mut lanes: Vec<_> = project
@@ -225,11 +324,40 @@ pub fn build(
         on.sort_by_key(|c| c.timeline_start);
         global.extend(on.into_iter().filter_map(|c| effect_pass(c, t, src, needs)));
     }
-    if !global.is_empty() {
+
+    // The main clip's Background, while it's on screen.
+    let main = project.main_track().map(|tr| tr.id.as_str());
+    let mut background = hex_rgba(&project.canvas.background_color);
+    let mut backdrop = None;
+    let main_layer = layers.iter().position(|(c, _)| {
+        main.is_some_and(|m| project.track_of(&c.id).is_some_and(|tr| tr.id == m))
+    });
+    if let Some(i) = main_layer {
+        match layers[i].0.background() {
+            Some(Background::Color { color }) => background = hex_rgba(&color),
+            Some(Background::Blur { level }) => {
+                backdrop = Some(Backdrop::Blur {
+                    layer: i,
+                    sigma: blur_sigma(level),
+                })
+            }
+            Some(Background::Image { uri, .. }) => backdrop = Some(Backdrop::Image(uri)),
+            // Patterns aren't drawn yet: the canvas colour.
+            Some(Background::Pattern { .. }) | None => {}
+        }
+    }
+    let canvas_colour = hex_rgba(&project.canvas.background_color);
+    let plain = stack.layers.len() == 1
+        && stack.layers[0].place.is_plain()
+        && global.is_empty()
+        && backdrop.is_none()
+        && background == canvas_colour;
+    if (!plain && !stack.layers.is_empty()) || !global.is_empty() {
         stack.canvas = Some(CanvasPasses {
             width: canvas_px.0,
             height: canvas_px.1,
-            background: hex_rgba(&project.canvas.background_color),
+            background,
+            backdrop,
             passes: global,
         });
     }
@@ -297,11 +425,12 @@ mod tests {
             live: None,
         };
         let clip = p.find_clip(&video).unwrap().1.clone();
+        let layers = [(&clip, Placement::default())];
         let mut needs = Needs::default();
         // Before the effect clip: nothing to do.
-        assert!(build(&p, Some(&clip), SECOND, (1280, 720), &src, &mut needs).is_empty());
+        assert!(build(&p, &layers, SECOND, (1280, 720), &src, &mut needs).is_empty());
         // 1 s into it at Speed 100 (2×): time 2 s, a third through.
-        let s = build(&p, Some(&clip), 3 * SECOND, (1280, 720), &src, &mut needs);
+        let s = build(&p, &layers, 3 * SECOND, (1280, 720), &src, &mut needs);
         let canvas = s.canvas.expect("canvas passes");
         let Pass::Effect { inputs, .. } = &canvas.passes[0] else {
             panic!("an effect pass");
@@ -326,12 +455,12 @@ mod tests {
             live: None,
         };
         let mut needs = Needs::default();
-        assert!(build(&p, None, 3 * SECOND, (10, 10), &src, &mut needs).is_empty());
+        assert!(build(&p, &[], 3 * SECOND, (10, 10), &src, &mut needs).is_empty());
         assert_eq!(needs.rows, ["Shake"]);
         let key = |_: &str| Some("effects/shake.json".to_string());
         src.effect_key = &key;
         let mut needs = Needs::default();
-        build(&p, None, 3 * SECOND, (10, 10), &src, &mut needs);
+        build(&p, &[], 3 * SECOND, (10, 10), &src, &mut needs);
         assert_eq!(needs.effect_packages, ["effects/shake.json"]);
         // A held slider at 0 switches it off before the edit lands.
         let clip = p.find_clip(&effect).unwrap().1;
@@ -343,8 +472,73 @@ mod tests {
         };
         src.live = Some(&live);
         let mut needs = Needs::default();
-        build(&p, None, 3 * SECOND, (10, 10), &src, &mut needs);
+        build(&p, &[], 3 * SECOND, (10, 10), &src, &mut needs);
         assert!(needs.effect_packages.is_empty());
+    }
+
+    #[test]
+    fn a_placed_picture_or_a_background_needs_the_canvas() {
+        let (p, video, _) = project_with_effect();
+        let packages = Packages::default();
+        let key = |_: &str| None;
+        let none = |_: &str, _: f64| None;
+        let src = Sources {
+            packages: &packages,
+            effect_key: &key,
+            filter_matrix: &none,
+            live: None,
+        };
+        let mut clip = p.find_clip(&video).unwrap().1.clone();
+        let mut needs = Needs::default();
+        let plain = [(&clip, Placement::default())];
+        assert!(build(&p, &plain, 0, (64, 36), &src, &mut needs).is_empty());
+        let zoomed = Placement {
+            scale: 0.5,
+            ..Placement::default()
+        };
+        let s = build(&p, &[(&clip, zoomed)], 0, (64, 36), &src, &mut needs);
+        assert_eq!(
+            s.canvas.as_ref().map(|c| (c.width, c.height)),
+            Some((64, 36))
+        );
+        // The main clip's Background: a colour fills, a blur is its picture.
+        clip.set_background(Some(&Background::Color {
+            color: "#ff0000".into(),
+        }));
+        let mut p = p.clone();
+        p.update_clip(&video, |c| {
+            *c = clip.clone();
+            true
+        });
+        let s = build(
+            &p,
+            &[(&clip, Placement::default())],
+            0,
+            (64, 36),
+            &src,
+            &mut needs,
+        );
+        assert_eq!(s.canvas.unwrap().background, [1., 0., 0., 1.]);
+        clip.set_background(Some(&Background::Blur { level: 2 }));
+        p.update_clip(&video, |c| {
+            *c = clip.clone();
+            true
+        });
+        let s = build(
+            &p,
+            &[(&clip, Placement::default())],
+            0,
+            (64, 36),
+            &src,
+            &mut needs,
+        );
+        assert_eq!(
+            s.canvas.unwrap().backdrop,
+            Some(Backdrop::Blur {
+                layer: 0,
+                sigma: 0.028
+            })
+        );
     }
 
     #[test]

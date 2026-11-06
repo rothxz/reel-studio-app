@@ -53,6 +53,13 @@ mod imp {
             cap: usize,
         ) -> usize;
         fn reel_filter_color_matrix(name: *const c_char, intensity: f64, out: *mut f64) -> i32;
+        fn reel_engine_clip_property(
+            e: *mut RawEngine,
+            clip_id: *const c_char,
+            property: *const c_char,
+            local: i64,
+            out: *mut f64,
+        ) -> i32;
     }
 
     /// A Classic filter's colour matrix at `intensity` (0–100), from the
@@ -128,6 +135,18 @@ mod imp {
                     is_visual: l.kind == KIND_VIDEO || l.kind == KIND_IMAGE,
                 })
                 .collect()
+        }
+
+        /// A clip's keyframed property (`transform.x`, `mask.feather`, …)
+        /// at clip-local `local`, eased as the renderers ease it; None when
+        /// the clip has no keyframes for it.
+        pub fn clip_property(&self, clip_id: &str, property: &str, local: Micros) -> Option<f64> {
+            let (id, prop) = (CString::new(clip_id).ok()?, CString::new(property).ok()?);
+            let mut out = 0f64;
+            let found = unsafe {
+                reel_engine_clip_property(self.0, id.as_ptr(), prop.as_ptr(), local, &mut out)
+            };
+            (found == 1).then_some(out)
         }
     }
 
@@ -228,6 +247,13 @@ mod imp {
                 })
                 .collect()
         }
+
+        /// The C++ engine eases keyframes; the stand-in interpolates
+        /// linearly (holds hold).
+        pub fn clip_property(&self, clip_id: &str, property: &str, local: Micros) -> Option<f64> {
+            let (_, clip) = self.project.as_ref()?.find_clip(clip_id)?;
+            crate::visual::linear_track_value(clip, property, local)
+        }
     }
 }
 
@@ -283,5 +309,35 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(120));
         let t = e.tick();
         assert!(t >= 100_000 && t < 400_000, "clock advanced to {t}");
+    }
+
+    /// Both backends answer a keyframed property at a clip-local time (the
+    /// inspector shows these at the playhead); a property without keyframes
+    /// has no answer.
+    #[test]
+    fn engine_evaluates_keyframed_properties() {
+        let mut p = Project::empty();
+        let item = MediaItem {
+            path: "/tmp/a.mp4".into(),
+            name: "a.mp4".into(),
+            duration: 4 * SECOND,
+            width: 1920,
+            height: 1080,
+            has_video: true,
+            still: false,
+        };
+        let a = p.insert_media(&item, None);
+        p.update_clip(&a, |c| {
+            c.add_keyframe_at(0, 50_000, &[("transform.x".into(), 0.)]);
+            c.add_keyframe_at(2 * SECOND, 50_000, &[("transform.x".into(), 1.)]);
+            true
+        });
+        let mut e = Engine::new();
+        e.load(&p).expect("engine parses the keyframes");
+        let mid = e.clip_property(&a, "transform.x", SECOND).unwrap();
+        assert!((mid - 0.5).abs() < 1e-6, "linear midpoint, got {mid}");
+        assert_eq!(e.clip_property(&a, "transform.x", 3 * SECOND), Some(1.));
+        assert_eq!(e.clip_property(&a, "transform.y", SECOND), None);
+        assert_eq!(e.clip_property("nope", "transform.x", SECOND), None);
     }
 }

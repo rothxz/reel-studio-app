@@ -97,6 +97,10 @@ pub enum Tool {
 
 pub type SliderFn = Rc<dyn Fn(&mut Editor, f32, bool, &mut Context<Editor>)>;
 
+/// A number field dragged sideways: gets the px moved since the press, and
+/// `true` on release.
+pub type NudgeFn = Rc<dyn Fn(&mut Editor, f32, bool, &mut Context<Editor>)>;
+
 /// A mouse drag in progress. Moves and the release reach the window root,
 /// wherever the pointer is.
 pub enum Drag {
@@ -113,12 +117,24 @@ pub enum Drag {
         key: &'static str,
         apply: SliderFn,
     },
+    /// A number field scrubbed sideways from `origin` (window x).
+    Nudge {
+        origin: f32,
+        apply: NudgeFn,
+    },
     /// A timeline clip moved or trimmed (`ui/timeline_edit.rs`).
     Clip(Box<ClipDrag>),
     /// A rubber band over the lanes (⇧ / ⌘ + drag on empty space).
     Marquee(Box<Marquee>),
     /// A keyframe diamond on the selected clip: a click seeks, a drag moves.
     Keyframe(Box<KeyframeDrag>),
+}
+
+/// A picture the player shows: its clip, and the frame server decoding it.
+pub struct WantedLayer {
+    pub key: String,
+    pub source: String,
+    pub clip_id: String,
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -242,6 +258,11 @@ pub struct Editor {
     pub(crate) live_value: Option<(&'static str, f64)>,
     /// Where the dragged slider was last (0–1); its release commits this.
     last_slider_fraction: Option<f32>,
+    /// How far (px) the scrubbed number field has moved.
+    nudge_dx: f32,
+    /// Background's Color / Image / Blur page, per clip (else the page of
+    /// the clip's own background).
+    pub(crate) background_page: Option<(String, crate::ui::visual::BgPage)>,
     pub(crate) toast: Option<SharedString>,
     toast_token: u64,
     /// The browser's tab, and each tab's chosen view.
@@ -292,12 +313,16 @@ pub struct Editor {
 
     servers: HashMap<String, FrameServer>,
     frame_tx: async_channel::Sender<DecodedFrame>,
-    wanted: Option<(String, Micros)>,
-    /// The clip the player shows (its filter and effect apply).
-    wanted_clip: Option<String>,
-    /// The last decoded frame as it came (effects run over it again when
-    /// the time or the document changes), and a count of frames decoded.
-    raw_frame: Option<(Arc<DecodedFrame>, Option<String>)>,
+    /// The pictures the player shows now, back to front.
+    wanted: Vec<WantedLayer>,
+    /// The source time last asked of each frame server.
+    requested: HashMap<String, Micros>,
+    /// The last frame each wanted layer's server decoded, as it came (it's
+    /// composed again when the time or the document changes), and a count
+    /// of frames decoded.
+    layer_frames: HashMap<String, Arc<DecodedFrame>>,
+    /// Background photos, decoded once (None: on its way, or it failed).
+    backdrop_images: HashMap<String, Option<Arc<DecodedFrame>>>,
     frame_seq: u64,
     /// Effect / filter shaders downloaded this session.
     pub(crate) packages: Packages,
@@ -306,7 +331,7 @@ pub struct Editor {
     fx_worker: effects::Worker,
     /// The last (frame, stack) sent to be drawn, the newest job number,
     /// and the job on screen (older results are dropped).
-    fx_last: Option<(u64, Stack)>,
+    fx_last: Option<(u64, Stack, bool)>,
     fx_seq: u64,
     fx_shown: u64,
     pub(crate) frame: Option<Arc<RenderImage>>,
@@ -390,6 +415,8 @@ impl Editor {
             popup: None,
             drag: None,
             live_value: None,
+            nudge_dx: 0.,
+            background_page: None,
             last_slider_fraction: None,
             toast: None,
             toast_token: 0,
@@ -419,9 +446,10 @@ impl Editor {
             waves: HashMap::new(),
             servers: HashMap::new(),
             frame_tx,
-            wanted: None,
-            wanted_clip: None,
-            raw_frame: None,
+            wanted: vec![],
+            requested: HashMap::new(),
+            layer_frames: HashMap::new(),
+            backdrop_images: HashMap::new(),
             frame_seq: 0,
             packages: Packages::default(),
             live_fx: None,
@@ -761,8 +789,7 @@ impl Editor {
     fn start_session(&mut self, project: Project, cx: &mut Context<Self>) {
         self.pause();
         self.servers.clear();
-        self.wanted = None;
-        self.raw_frame = None;
+        self.forget_layers();
         if let Some(old) = self.frame.take() {
             self.stale_frames.push(old);
         }
@@ -909,8 +936,7 @@ impl Editor {
         }
         self.pause();
         self.servers.clear();
-        self.wanted = None;
-        self.raw_frame = None;
+        self.forget_layers();
         if let Some(old) = self.frame.take() {
             self.stale_frames.push(old);
         }
@@ -1497,36 +1523,63 @@ impl Editor {
         cx.notify();
     }
 
-    /// Asks the decoder of the top visible clip for the frame at the playhead.
+    /// Drops every picture the player was showing.
+    fn forget_layers(&mut self) {
+        self.wanted.clear();
+        self.requested.clear();
+        self.layer_frames.clear();
+    }
+
+    /// Asks the decoders of every visible picture (video / photo on a
+    /// visual lane) for its frame at the preview time. Each layer has its
+    /// own decoder, keyed by file and its turn among the layers of that
+    /// file, so two layers of one file don't fight over one.
     pub(crate) fn request_preview(&mut self) {
-        let top = self
+        let layers: Vec<_> = self
             .engine
             .active_layers(self.preview_time())
             .into_iter()
-            .rfind(|l| l.is_visual && !l.source.is_empty());
-        let Some(layer) = top else {
-            self.wanted = None;
-            self.wanted_clip = None;
-            self.raw_frame = None;
+            .filter(|l| l.is_visual && !l.source.is_empty())
+            .collect();
+        if layers.is_empty() {
+            self.forget_layers();
             if let Some(old) = self.frame.take() {
                 self.stale_frames.push(old);
             }
             self.frame_info = None;
             return;
-        };
-        self.wanted_clip = Some(layer.clip_id.clone());
-        if self.wanted.as_ref() == Some(&(layer.source.clone(), layer.source_time)) {
-            return;
         }
-        let server = self.servers.entry(layer.source.clone()).or_insert_with(|| {
-            FrameServer::spawn(
-                layer.source.clone(),
-                PREVIEW_MAX_WIDTH,
-                self.frame_tx.clone(),
-            )
-        });
-        server.request(layer.source_time);
-        self.wanted = Some((layer.source, layer.source_time));
+        let mut wanted = Vec::with_capacity(layers.len());
+        for layer in layers {
+            let turn = wanted
+                .iter()
+                .filter(|w: &&WantedLayer| w.source == layer.source)
+                .count();
+            let key = format!("{}#{turn}", layer.source);
+            if self.requested.get(&key) != Some(&layer.source_time) {
+                let server = self.servers.entry(key.clone()).or_insert_with(|| {
+                    FrameServer::spawn(
+                        layer.source.clone(),
+                        key.clone(),
+                        PREVIEW_MAX_WIDTH,
+                        self.frame_tx.clone(),
+                    )
+                });
+                server.request(layer.source_time);
+                self.requested.insert(key.clone(), layer.source_time);
+            }
+            wanted.push(WantedLayer {
+                key,
+                source: layer.source,
+                clip_id: layer.clip_id,
+            });
+        }
+        // Layers gone from view: their frames and decoders go too.
+        let keys: HashSet<&str> = wanted.iter().map(|w| w.key.as_str()).collect();
+        self.layer_frames.retain(|k, _| keys.contains(k.as_str()));
+        self.requested.retain(|k, _| keys.contains(k.as_str()));
+        self.servers.retain(|k, _| keys.contains(k.as_str()));
+        self.wanted = wanted;
     }
 
     /// What the player shows: the hovered time while the preview axis is
@@ -1554,20 +1607,25 @@ impl Editor {
     }
 
     fn on_frame(&mut self, f: DecodedFrame, cx: &mut Context<Self>) {
-        if self.wanted.as_ref().is_none_or(|(src, _)| *src != f.source) {
+        let Some(top) = self.wanted.last() else {
+            return;
+        };
+        if !self.wanted.iter().any(|w| w.key == f.key) {
             return; // a cut moved on to another file meanwhile
         }
-        self.frame_info = Some((f.width, f.height, f.pts));
-        self.frame_seq += 1;
-        // Drawn on the next render, through the effects if any are on.
-        self.raw_frame = Some((Arc::new(f), self.wanted_clip.clone()));
-        let (since, n) = &mut self.fps_window;
-        *n += 1;
-        let elapsed = since.elapsed().as_secs_f32();
-        if elapsed >= 1. {
-            self.preview_fps = *n as f32 / elapsed;
-            self.fps_window = (Instant::now(), 0);
+        if top.key == f.key {
+            self.frame_info = Some((f.width, f.height, f.pts));
+            let (since, n) = &mut self.fps_window;
+            *n += 1;
+            let elapsed = since.elapsed().as_secs_f32();
+            if elapsed >= 1. {
+                self.preview_fps = *n as f32 / elapsed;
+                self.fps_window = (Instant::now(), 0);
+            }
         }
+        self.frame_seq += 1;
+        // Composed on the next render, with the looks and places that apply.
+        self.layer_frames.insert(f.key.clone(), Arc::new(f));
         cx.notify();
     }
 
@@ -1590,15 +1648,31 @@ impl Editor {
     /// do. Fetches what's missing (catalog rows, packages); it's drawn
     /// again when they land.
     fn refresh_picture(&mut self, cx: &mut Context<Self>) {
-        let Some((frame, clip_id)) = self.raw_frame.clone() else {
+        // Every visible picture needs a frame first (else the last
+        // composition stays up, rather than one missing a layer).
+        let Some(frames) = self
+            .wanted
+            .iter()
+            .map(|w| self.layer_frames.get(&w.key).cloned())
+            .collect::<Option<Vec<_>>>()
+        else {
             return;
         };
+        if frames.is_empty() {
+            return;
+        }
+        let t = self.preview_time();
         let mut needs = Needs::default();
         let stack = {
-            let shown = clip_id
-                .as_deref()
-                .and_then(|id| self.project.find_clip(id))
-                .map(|(_, c)| c);
+            let clips: Vec<(&Clip, fx_stack::Placement)> = self
+                .wanted
+                .iter()
+                .filter_map(|w| self.project.find_clip(&w.clip_id).map(|(_, c)| c))
+                .map(|c| (c, self.layer_placement(c, t)))
+                .collect();
+            if clips.len() != frames.len() {
+                return; // the document moved on; the next request catches up
+            }
             let effects = &self.effects;
             let effect_key = |name: &str| {
                 effects
@@ -1614,8 +1688,8 @@ impl Editor {
             };
             fx_stack::build(
                 &self.project,
-                shown,
-                self.preview_time(),
+                &clips,
+                t,
                 self.fx_canvas_px(),
                 &src,
                 &mut needs,
@@ -1628,26 +1702,54 @@ impl Editor {
         for key in needs.filter_packages {
             self.fetch_package(key, true, cx);
         }
+        let backdrop = match stack.canvas.as_ref().and_then(|c| c.backdrop.as_ref()) {
+            Some(fx_stack::Backdrop::Image(path)) => self.backdrop_image(path, cx),
+            _ => None,
+        };
 
-        if self
-            .fx_last
-            .as_ref()
-            .is_some_and(|(seq, last)| *seq == self.frame_seq && *last == stack)
-        {
+        if self.fx_last.as_ref().is_some_and(|(seq, last, had)| {
+            *seq == self.frame_seq && *last == stack && *had == backdrop.is_some()
+        }) {
             return;
         }
         self.fx_seq += 1;
         if stack.is_empty() {
             self.fx_shown = self.fx_seq;
-            self.show_picture(frame.width, frame.height, frame.bgra.clone());
+            let top = &frames[frames.len() - 1];
+            self.show_picture(top.width, top.height, top.bgra.clone());
         } else {
             self.fx_worker.submit(effects::Job {
                 seq: self.fx_seq,
-                frame,
+                frames,
+                backdrop: backdrop.clone(),
                 stack: stack.clone(),
             });
         }
-        self.fx_last = Some((self.frame_seq, stack));
+        self.fx_last = Some((self.frame_seq, stack, backdrop.is_some()));
+    }
+
+    /// A Background photo for the compositor: decoded once, off the UI
+    /// thread; None until it's in (the canvas colour shows meanwhile).
+    fn backdrop_image(&mut self, path: &str, cx: &mut Context<Self>) -> Option<Arc<DecodedFrame>> {
+        if let Some(loaded) = self.backdrop_images.get(path) {
+            return loaded.clone();
+        }
+        self.backdrop_images.insert(path.to_string(), None);
+        let p = path.to_string();
+        let task = cx
+            .background_executor()
+            .spawn(async move { decoder::thumbnail(&p, 0, PREVIEW_MAX_WIDTH) });
+        let key = path.to_string();
+        cx.spawn(async move |this, cx| {
+            let Ok(frame) = task.await else { return };
+            this.update(cx, |ed, cx| {
+                ed.backdrop_images.insert(key, Some(Arc::new(frame)));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        None
     }
 
     fn show_picture(&mut self, width: u32, height: u32, bgra: Vec<u8>) {
@@ -1662,7 +1764,7 @@ impl Editor {
 
     fn on_rendered(&mut self, r: Rendered, cx: &mut Context<Self>) {
         // Superseded meanwhile (or the frame went away).
-        if r.seq <= self.fx_shown || self.raw_frame.is_none() {
+        if r.seq <= self.fx_shown || self.wanted.is_empty() {
             return;
         }
         self.fx_shown = r.seq;
@@ -1905,6 +2007,11 @@ impl Editor {
             Drag::Marquee(_) => self.update_marquee(e.position, cx),
             Drag::Keyframe(_) => self.update_keyframe_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
+            Drag::Nudge { origin, apply } => {
+                let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
+                self.nudge_dx = dx;
+                apply(self, dx, false, cx);
+            }
             Drag::Slider { key, apply } => {
                 let (key, apply) = (*key, apply.clone());
                 if let Some(f) = self.slider_fraction(key, e.position.x) {
@@ -1937,6 +2044,16 @@ impl Editor {
         cx.notify();
     }
 
+    /// Starts scrubbing a number field pressed at `x`.
+    pub fn start_nudge(&mut self, x: Pixels, apply: NudgeFn, cx: &mut Context<Self>) {
+        self.nudge_dx = 0.;
+        self.drag = Some(Drag::Nudge {
+            origin: f32::from(x),
+            apply,
+        });
+        cx.notify();
+    }
+
     pub fn zoom_slider_to(&mut self, x: Pixels, cx: &mut Context<Self>) {
         if let Some(f) = self.slider_fraction("zoom", x) {
             self.set_zoom(MIN_PPS * (MAX_PPS / MIN_PPS).powf(f), cx);
@@ -1952,6 +2069,11 @@ impl Editor {
                 }
                 self.live_value = None;
                 self.live_fx = None;
+            }
+            Some(Drag::Nudge { apply, .. }) => {
+                let dx = std::mem::take(&mut self.nudge_dx);
+                apply(self, dx, true, cx);
+                self.live_value = None;
             }
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),

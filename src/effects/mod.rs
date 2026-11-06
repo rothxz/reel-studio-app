@@ -5,10 +5,10 @@
 //! - `msl`: Metal source for each pass (the dialect rewritten, helpers).
 //! - `metal`: the passes on the GPU (macOS).
 //!
-//! The editor hands the latest decoded frame and its stack to one render
-//! thread (latest wins, like the decoders) and shows what comes back.
-//! Without a GPU renderer (other platforms for now) frames pass through
-//! unchanged.
+//! The editor hands the latest decoded frames (one per visible picture) and
+//! their stack to one render thread (latest wins, like the decoders) and
+//! shows what comes back. Without a GPU renderer (other platforms for now)
+//! the top picture passes through unchanged.
 
 #[cfg(target_os = "macos")]
 pub mod metal;
@@ -21,11 +21,14 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::decoder::DecodedFrame;
 use stack::Stack;
 
-/// One frame to draw through a stack.
+/// The pictures to draw through a stack.
 pub struct Job {
     /// Grows with every job: a result older than what's shown is dropped.
     pub seq: u64,
-    pub frame: Arc<DecodedFrame>,
+    /// One per `stack.layers`, back to front.
+    pub frames: Vec<Arc<DecodedFrame>>,
+    /// The Background photo, when the stack has one and it's loaded.
+    pub backdrop: Option<Arc<DecodedFrame>>,
     pub stack: Stack,
 }
 
@@ -68,20 +71,27 @@ impl Worker {
                             slot = ready.wait(slot).unwrap();
                         }
                     };
-                    let f = &job.frame;
                     #[cfg(target_os = "macos")]
                     let drawn = renderer.as_mut().map(|r| {
-                        let image = metal::Image {
-                            width: f.width,
-                            height: f.height,
-                            bgra: &f.bgra,
-                        };
-                        r.render(image, &job.stack)
+                        fn image(f: &Arc<DecodedFrame>) -> metal::Image<'_> {
+                            metal::Image {
+                                width: f.width,
+                                height: f.height,
+                                bgra: &f.bgra,
+                            }
+                        }
+                        let frames: Vec<_> = job.frames.iter().map(image).collect();
+                        r.render(&frames, job.backdrop.as_ref().map(image), &job.stack)
                     });
                     #[cfg(not(target_os = "macos"))]
                     let drawn: Option<(u32, u32, Vec<u8>)> = None;
-                    let (width, height, bgra) =
-                        drawn.unwrap_or_else(|| (f.width, f.height, f.bgra.clone()));
+                    let Some((width, height, bgra)) = drawn.or_else(|| {
+                        job.frames
+                            .last()
+                            .map(|f| (f.width, f.height, f.bgra.clone()))
+                    }) else {
+                        continue;
+                    };
                     let rendered = Rendered {
                         seq: job.seq,
                         width,

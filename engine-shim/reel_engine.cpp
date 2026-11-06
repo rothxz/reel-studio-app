@@ -10,6 +10,7 @@
 
 #include "videoengine/Engine.h"
 #include "videoengine/FilterPresets.h"
+#include "videoengine/Keyframes.h"
 #include "videoengine/Timeline.h"
 
 using namespace videoengine;
@@ -87,6 +88,35 @@ size_t reel_engine_active_layers(ReelEngine* e, int64_t micros, ReelActiveLayer*
     l.track_order = a.track->order;
   }
   return n;
+}
+
+// The clip's keyframed `property` ("transform.x", "mask.feather",
+// "adjust.contrast", "audio.volume", …) at clip-local `local`, eased as the
+// renderers ease it (angles as angles). 1 when the clip has keyframes for it
+// (`out` set), 0 when it doesn't (or there is no such clip).
+int32_t reel_engine_clip_property(ReelEngine* e, const char* clip_id, const char* property, int64_t local,
+                                  double* out) {
+  if (!e->snapshot || !clip_id || !property) return 0;
+  const std::string id(clip_id), name(property);
+  for (const auto& track : e->snapshot->tracks) {
+    for (const auto& clip : track.clips) {
+      if (clip.id != id) continue;
+      const ClipAnimation anim = ParseClipAnimation(clip);
+      std::vector<const KeyframeTrackData*> all = {&anim.x, &anim.y, &anim.scale, &anim.rotation, &anim.opacity,
+                                                   &anim.volume};
+      for (const auto& t : anim.adjust) all.push_back(&t);
+      for (const auto& t : anim.mask) all.push_back(&t);
+      for (const auto& t : anim.other) all.push_back(&t);
+      for (const KeyframeTrackData* t : all) {
+        if (t->keyframes.empty() || t->property != name) continue;
+        const bool angle = name.size() >= 8 && name.compare(name.size() - 8, 8, "rotation") == 0;
+        *out = EvaluateTrack(*t, static_cast<double>(local), 0, angle);
+        return 1;
+      }
+      return 0;
+    }
+  }
+  return 0;
 }
 
 // A Classic filter's 4x5 colour matrix (rows R, G, B, A; column 5 the

@@ -134,6 +134,17 @@ icons! {
     FormatText => (MDI, 0xf0284),
     Filmstrip => (MDI, 0xf0230),
     Ban => (MDI, 0xf073a),
+    RotateLeft => (ION, 0xf143),
+    RotateRight => (ION, 0xf13d),
+    SwapHorizontal => (ION, 0xf5b1),
+    SwapVertical => (ION, 0xf5b4),
+    BanOutline => (ION, 0xf16a),
+    MaskHorizontal => (MDI, 0xf0374),
+    MaskMirror => (MDI, 0xf11d8),
+    CircleOutline => (MDI, 0xf0766),
+    RectangleOutline => (MDI, 0xf0e5f),
+    HeartOutline => (MDI, 0xf02d5),
+    StarOutline => (MDI, 0xf04d2),
 }
 
 impl Icon {

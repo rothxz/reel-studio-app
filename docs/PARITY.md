@@ -107,8 +107,9 @@ isn't listed.
 
 ## Player
 
-- [x] Frame-accurate preview of the top visible video clip (FFmpeg decode,
-  rotation applied)
+- [x] Frame-accurate preview of every visible video / photo layer (FFmpeg
+  decode, rotation applied; one decoder per layer, so a clip and its copy
+  on an overlay lane don't share one)
 - [~] The project canvas fitted in the panel on near-black, filled with
   the canvas background colour; the top clip drawn contain-fit in it.
   *No background blur / image yet.*
@@ -130,9 +131,17 @@ isn't listed.
   --ignored every_hosted_package`). *macOS only for now (other
   platforms show frames unprocessed); GPU readback per frame, not yet
   zero-copy; the background-blur effect and body effects aren't ported.*
-- [ ] Real compositor: all layers (overlays, images, text, stickers,
-  drawings), transforms, keyframes, masks, crop, blend modes, adjust,
-  transitions, background, cutout
+- [~] Compositor (`effects/metal.rs`, Metal): the video / photo layers
+  back to front, each through its own looks, then placed on the canvas —
+  crop, mirror / flip, transform (contain-fit × scale, clockwise turn,
+  move), keyframes (the engine evaluates them at the preview time), shape
+  mask (six shapes, feather, invert), opacity, Splice blend (W3C
+  formulas) — over the canvas colour or the main clip's Background
+  (colour, photo, or its own picture blurred at the four strengths). A
+  held Visual slider / field shows live before release. One picture with
+  nothing to place still goes straight to the screen. *Not yet: text,
+  stickers, drawings, transitions, Adjust, cutout, pattern backgrounds,
+  crop straighten.*
 - [ ] Audio playback in sync (mixer, volume, mute, fades)
 - [x] Timecode `HH:MM:SS:FF | HH:MM:SS:FF` (mono)
 - [x] Transport: ⏮ go to start, ◀ previous frame, ▶/⏸, ▶ next frame,
@@ -153,10 +162,39 @@ isn't listed.
   it, else the clip's first. *Panels are placeholders except Speed ›
   Normal.*
 - [~] Tabbed inspector per kind (`inspectorTabs.ts`). *Tabs done; panels:*
-  - [~] Video: Visual (Basic, Rotate, Remove BG, Mask, Splice, Background
-    on main lane) · Audio (Volume) · Speed (Normal ✓, Curve) · Animation ·
-    Adjust. *Speed › Normal: log slider 0.1–100× snapping to 1×, read-out,
-    length before → after, reset; one undo step per drag.*
+  - [~] Video: Visual ✓ · Audio (Volume) · Speed (Normal ✓, Curve) ·
+    Animation · Adjust. *Speed › Normal: log slider 0.1–100× snapping to
+    1×, read-out, length before → after, reset; one undo step per drag.*
+    Visual (`ui/visual.rs`, document side `visual.rs`), each control one
+    undo step:
+    - [x] Basic: Transform (Zoom slider to 400 % / field to 10 000 %,
+      Position X / Y in canvas px with Y up, Rotate) with reset and ‹ ◇ ›
+      (previous / next diamond, add or delete one at the playhead);
+      Opacity on a video / photo. On a keyframed clip the values shown
+      are the engine's at the playhead (`reel_engine_clip_property`) and
+      edits key the playhead (the diamond under it, else a new one — auto
+      keyframe, no switch yet).
+    - [x] Rotate: Left / Right quarter turn keeping the fit (the canvas
+      turns too when it's the main lane's only clip and had its shape),
+      Mirror, Flip (lit when on). *Crop shown disabled (no crop editor).*
+    - [~] Remove BG: Auto removal switch, Keep (Person / Auto), Stroke
+      switch, colour, Size, Spacing. *No background removal (needs the
+      on-device model): a cutout already in the project can be turned off
+      (a body effect keeps the matte) and its stroke edited; the edge
+      sliders and stroke preset tiles aren't ported.*
+    - [x] Mask: None + six shape tiles; the shape's Invert, Position,
+      Size (W / H per shape), Rotate (centred slider), Feather, reset
+      (also drops its keyframes) and ‹ ◇ › (◇ keys the mask too). A new
+      shape keeps the place and size dialled in.
+    - [x] Splice (overlay video lanes only): the 11 blend modes, Opacity.
+      *Pills, not the sample tiles.*
+    - [~] Background (main lane only): Type Color / Image / Blur, colour
+      swatches (+ none), Upload photo, four blur strengths over the clip's
+      thumbnail, reset, Apply to all (one step). *No pattern tiles, no
+      eyedropper or custom colour.*
+    - *All of it shows in the player (see Compositor) except Remove BG.
+      Number fields are drag-sideways scrubbers until there's a text
+      field.*
   - [ ] Image: Visual · Speed · Animation · Adjust
   - [ ] Text: Text (Basic, Templates, Fonts, Effects, Bubbles) · Animation ·
     Visual (Basic)
@@ -336,8 +374,8 @@ items, tooltips and the dialog.
    rename, editable number fields, search, text clips.
 2. Timeline leftovers: the cover editor; group move of a multi-selection;
    Graphs badge and tracked-path diamonds.
-3. Inspector panels on the real document fields: Basic (transform,
-   opacity), Volume, Rotate, Background, Adjust.
+3. Inspector panels on the real document fields: Volume, Adjust
+   (Visual is done).
 4. Audio playback, then the compositor (all layers), then export.
 
 ## Platform

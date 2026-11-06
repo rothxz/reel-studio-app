@@ -12,4 +12,5 @@ pub mod player;
 pub mod timeline;
 pub mod timeline_edit;
 pub mod toolbar;
+pub mod visual;
 pub mod widgets;

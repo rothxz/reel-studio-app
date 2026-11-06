@@ -364,7 +364,14 @@ pub fn segment_tabs(tabs: Vec<(SharedString, bool, OnClick)>) -> Div {
 /// A slider's track, fill and thumb at `fraction` (0–1). The caller makes
 /// it draggable (it records the bounds and handles mouse down).
 pub fn slider_track(fraction: f32, dragging: bool) -> Div {
+    slider_track_from(fraction, 0., dragging)
+}
+
+/// A slider whose fill grows from `origin` (0.5: a centre tick, for a
+/// value that goes both ways).
+pub fn slider_track_from(fraction: f32, origin: f32, dragging: bool) -> Div {
     let f = fraction.clamp(0., 1.);
+    let (lo, hi) = (f.min(origin), f.max(origin));
     div()
         .relative()
         .h(px(20.))
@@ -383,12 +390,23 @@ pub fn slider_track(fraction: f32, dragging: bool) -> Div {
         .child(
             div()
                 .absolute()
-                .left_0()
-                .w(gpui::relative(f))
+                .left(gpui::relative(lo))
+                .w(gpui::relative(hi - lo))
                 .h(px(2.))
                 .rounded(px(1.))
                 .bg(theme::text_secondary()),
         )
+        .when(origin > 0., |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(gpui::relative(origin))
+                    .ml(px(-0.5))
+                    .w(px(1.))
+                    .h(px(8.))
+                    .bg(theme::text_tertiary()),
+            )
+        })
         .child(
             div()
                 .absolute()
@@ -398,4 +416,183 @@ pub fn slider_track(fraction: f32, dragging: bool) -> Div {
                 .rounded_full()
                 .bg(theme::text()),
         )
+}
+
+/// A section heading with controls on its right (reset, ‹ ◇ ›, a switch).
+pub fn section_with(
+    title: impl Into<SharedString>,
+    first: bool,
+    right: impl IntoIterator<Item = gpui::AnyElement>,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .when(!first, |d| {
+            d.child(
+                div()
+                    .h(px(1.))
+                    .mt(px(8.))
+                    .mb(px(2.))
+                    .bg(theme::card_border()),
+            )
+        })
+        .child(
+            div()
+                .h(px(34.))
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(theme::XS))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::text())
+                        .child(title.into()),
+                )
+                .children(right),
+        )
+}
+
+/// "Label ……… [switch]": an on/off row.
+pub fn switch_row(label: impl Into<SharedString>, switch: impl IntoElement) -> Div {
+    div()
+        .h(px(34.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(theme::XS))
+                .text_color(theme::text_secondary())
+                .child(label.into()),
+        )
+        .child(switch)
+}
+
+/// The inspector's small black-and-white switch.
+pub fn switch(id: impl Into<ElementId>, on: bool, disabled: bool) -> Stateful<Div> {
+    let (track, thumb): (Hsla, Hsla) = if on {
+        (theme::text().into(), theme::app_bg().into())
+    } else {
+        (theme::button_bg().into(), theme::text().into())
+    };
+    div()
+        .id(id)
+        .flex_none()
+        .w(px(30.))
+        .h(px(18.))
+        .p(px(2.))
+        .rounded_full()
+        .bg(track)
+        .flex()
+        .when(on, |d| d.justify_end())
+        .when(disabled, |d| d.opacity(0.4))
+        .when(!disabled, |d| d.cursor_pointer())
+        .child(div().size(px(14.)).rounded_full().bg(thumb))
+}
+
+/// A greyed note under a section (a hint, what a value means).
+pub fn panel_note(text: impl Into<SharedString>) -> Div {
+    div()
+        .mt(px(2.))
+        .mb_1()
+        .text_size(px(theme::XS))
+        .line_height(px(16.))
+        .text_color(theme::text_tertiary())
+        .child(text.into())
+}
+
+/// A small pill (a choice among a few: Color / Image / Blur); `on` is
+/// drawn white, a disabled one greyed.
+pub fn choice_pill(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+    enabled: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .min_w(px(56.))
+        .h(px(24.))
+        .px(px(10.))
+        .rounded(px(6.))
+        .text_size(px(theme::XS))
+        .font_weight(FontWeight::MEDIUM)
+        .map(|d| {
+            if on {
+                d.bg(theme::text()).text_color(theme::app_bg())
+            } else if enabled {
+                d.bg(theme::button_bg())
+                    .text_color(theme::text())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::button_hover()))
+            } else {
+                d.bg(theme::button_bg()).text_color(theme::text_disabled())
+            }
+        })
+        .child(label.into())
+}
+
+/// A square picker tile: `content` centred, a white ring when chosen, the
+/// label under it.
+pub fn pick_tile(
+    id: impl Into<ElementId>,
+    size: f32,
+    on: bool,
+    content: impl IntoElement,
+    label: Option<SharedString>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .w(px(size))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .cursor_pointer()
+        .child(
+            div()
+                .relative()
+                .size(px(size))
+                .rounded(px(8.))
+                .overflow_hidden()
+                .bg(theme::button_bg())
+                .border_2()
+                .border_color(if on {
+                    theme::text().into()
+                } else {
+                    gpui::transparent_black()
+                })
+                .hover(|s| s.bg(theme::button_hover()))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(content),
+        )
+        .when_some(label, |d, label| {
+            d.child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_center()
+                    .text_size(px(10.))
+                    .text_color(if on {
+                        theme::text()
+                    } else {
+                        theme::text_tertiary()
+                    })
+                    .child(label),
+            )
+        })
 }

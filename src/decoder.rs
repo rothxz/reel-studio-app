@@ -17,6 +17,10 @@ use crate::model::{MediaItem, Micros, SECOND};
 
 pub struct DecodedFrame {
     pub source: String,
+    /// Which frame server it came from (the player decodes each visible
+    /// layer on its own, so two layers of one file don't share a decoder);
+    /// the file again for tiles and thumbnails.
+    pub key: String,
     pub pts: Micros,
     pub width: u32,
     pub height: u32,
@@ -89,7 +93,12 @@ pub struct FrameServer {
 }
 
 impl FrameServer {
-    pub fn spawn(source: String, max_width: u32, out: async_channel::Sender<DecodedFrame>) -> Self {
+    pub fn spawn(
+        source: String,
+        key: String,
+        max_width: u32,
+        out: async_channel::Sender<DecodedFrame>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name(format!(
@@ -97,7 +106,7 @@ impl FrameServer {
                 source.rsplit('/').next().unwrap_or("")
             ))
             .spawn(move || {
-                if let Err(e) = serve(&source, max_width, rx, out) {
+                if let Err(e) = serve(&source, &key, max_width, rx, out) {
                     eprintln!("decoder for {source} stopped: {e}");
                 }
             })
@@ -242,6 +251,7 @@ fn rotate(w: u32, h: u32, src: Vec<u8>, degrees: u32) -> (u32, u32, Vec<u8>) {
 
 fn serve(
     source: &str,
+    key: &str,
     max_width: u32,
     rx: mpsc::Receiver<Micros>,
     out: async_channel::Sender<DecodedFrame>,
@@ -285,6 +295,7 @@ fn serve(
         if out
             .send_blocking(DecodedFrame {
                 source: source.to_string(),
+                key: key.to_string(),
                 pts,
                 width,
                 height,
@@ -317,6 +328,7 @@ pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<Decod
     let (width, height, bgra) = dec.frame_bgra(&frame)?;
     Ok(DecodedFrame {
         source: path.to_string(),
+        key: path.to_string(),
         pts,
         width,
         height,
@@ -415,6 +427,7 @@ fn serve_tiles(
                 continue;
             };
             let sent = out.send_blocking(DecodedFrame {
+                key: source.clone(),
                 source,
                 pts: at,
                 width,
