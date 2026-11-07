@@ -335,6 +335,9 @@ impl Clip {
         {
             return title.to_string();
         }
+        if let Some(n) = self.extra.get("extractedNumber").and_then(Value::as_u64) {
+            return format!("Extracted audio {n}");
+        }
         if self.kind == "sticker" {
             return "Sticker".into();
         }
@@ -645,7 +648,7 @@ impl Project {
         self.clip_mut(clip_id).is_some_and(f)
     }
 
-    fn clip_mut(&mut self, clip_id: &str) -> Option<&mut Clip> {
+    pub(crate) fn clip_mut(&mut self, clip_id: &str) -> Option<&mut Clip> {
         self.tracks
             .iter_mut()
             .flat_map(|t| t.clips.iter_mut())

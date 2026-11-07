@@ -77,6 +77,9 @@ pub struct Placement {
     pub flip_y: bool,
     /// The visible part of the source, 0–1: x, y, width, height.
     pub crop: [f32; 4],
+    /// The crop's straighten, degrees clockwise: the source turns about
+    /// the crop's centre (grown to cover it) under the crop box.
+    pub crop_turn: f32,
     pub mask: Option<MaskPlan>,
     /// Splice: index in `visual::BLEND_MODES` (0 normal).
     pub blend: u32,
@@ -96,6 +99,7 @@ impl Default for Placement {
             flip_x: false,
             flip_y: false,
             crop: [0., 0., 1., 1.],
+            crop_turn: 0.,
             mask: None,
             blend: 0,
             natural: None,

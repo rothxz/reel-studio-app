@@ -158,7 +158,8 @@ isn't listed.
   zero-copy; the background-blur effect and body effects aren't ported.*
 - [~] Compositor (`effects/metal.rs`, Metal): the video / photo layers
   back to front, each through its own looks, then placed on the canvas —
-  crop, mirror / flip, transform (contain-fit × scale, clockwise turn,
+  crop (with its straighten: the source turned about the crop's centre,
+  grown to cover it), mirror / flip, transform (contain-fit × scale, clockwise turn,
   move), keyframes (the engine evaluates them at the preview time), shape
   mask (six shapes, feather, invert), opacity, Splice blend (W3C
   formulas) — over the canvas colour or the main clip's Background
@@ -240,7 +241,7 @@ isn't listed.
       keyframe, no switch yet).
     - [x] Rotate: Left / Right quarter turn keeping the fit (the canvas
       turns too when it's the main lane's only clip and had its shape),
-      Mirror, Flip (lit when on). *Crop shown disabled (no crop editor).*
+      Mirror, Flip (lit when on), Crop (opens the Crop dialog).
     - [~] Remove BG: Auto removal switch, Keep (Person / Auto), Stroke
       switch, colour, Size, Spacing. *No background removal (needs the
       on-device model): a cutout already in the project can be turned off
@@ -302,9 +303,29 @@ isn't listed.
   click (frame-snapped); Esc goes back to Select
 - [x] Delete left (Q), Delete right (W): selected clip under the playhead,
   else the main clip; trims the source window; magnet closes the gap
-- [~] The selected clip's actions. *Split, Delete, Duplicate (per kind, old
-  order); nothing selected: Split + disabled Delete. Still to port:
-  replace, crop, freeze, reverse, extract audio, rotate…*
+- [~] The selected clip's actions, per kind in the old order; nothing
+  selected: Split + disabled Delete. A video: Replace, Crop, Duplicate,
+  Split, Delete, Freeze, Extract audio, Overlay, Layers (a photo: no
+  Freeze / Extract audio).
+  - Replace: a file pick (video or photo) swapped into the slot, keeping
+    the edits on it; a video too short for the slot is refused ("Pick a
+    video at least 4.2s long"); crop, cutout, reversed copy, freeze and
+    camera track go with the old picture.
+  - Crop: the dialog (stage with box, thirds grid, 8 handles + move; a
+    video's frame scrubber; Custom + 9 ratio buttons; Rotate ±20° with
+    its value; Reset · Cancel · Confirm, Esc / Return), one undo step.
+    *The degree box doesn't take typing yet.*
+  - Freeze: a 3 s still of the frame at the playhead between the halves
+    (the engine's source time), the rest of the lane moving right.
+  - Extract audio: "Extracted audio N" on the audio lane, video muted.
+  - Overlay: main lane → a free overlay lane (magnet closes up); overlay
+    → main lane at the nearest cut (magnet off: where it is).
+  - Layers: Arrange layers docked in the inspector (front-first tiles of
+    what's on screen at the playhead, Front / Back, press-drag to
+    re-stack, click picks; `Track.order` / `stackOrder`).
+  - *Still to port: a sticker's Replace (back to the browser), and the
+    tools this build can't run yet (reverse, voice, cut pauses, auto
+    title, tracking).*
 - [~] Keyframe ◇. *Shown disabled until keyframes are editable.*
 - [x] Toggles: main-lane magnet (P), linkage, preview axis (S), snapping
   (N), with toasts; remembered.
@@ -415,8 +436,11 @@ isn't listed.
   first use above the picture lanes (`layerStack` set); text style fields
   as the app's (unset = its default); `sourceWidth/Height` on stickers;
   `title`, `volume`, `muted`, `audioFade` on audio.
-- [ ] Keyframes, transforms, masks, crop, adjust, transitions, drawings,
-  captions, speed curves, freeze, reverse (baked copy), extract audio
+- [x] Crop (`crop` box + `rotation`), freeze frame, extract audio
+  (`extractedNumber`), replace media, layer order (`ReorderLayers`:
+  places reshuffled, ties pulled apart) — `clip_edits.rs`, tested.
+- [ ] Keyframes, transforms, masks, adjust, transitions, drawings,
+  captions, speed curves, reverse (baked copy)
 - [ ] Media relink for projects from the web app
 
 ## Export
