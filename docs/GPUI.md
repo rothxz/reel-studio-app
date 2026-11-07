@@ -164,14 +164,31 @@ with a valid signature, and (when this app has a team) be signed by the
 same team. Only an installed bundle in a writable folder updates (not
 `cargo run`, not a quarantine copy).
 
-**Secrets** (repo settings): `REEL_STUDIO_TOKEN` (fine-grained, Contents:
-read on the private app repo), `REEL_ASSETS_URL` / `REEL_CATALOG_URL` /
-`REEL_CATALOG_KEY` (the app's public client config) are required.
+**Secrets** live in the **`release` environment** (Settings → Environments
+→ New environment `release`, Deployment branches: selected, `release`
+only), never as repo secrets: then only the release workflow on the
+`release` branch can read them, not a workflow edited on another branch or
+in a pull request. `REEL_STUDIO_TOKEN` (fine-grained, Contents: read on
+the private app repo, nothing else), `REEL_ASSETS_URL` /
+`REEL_CATALOG_URL` / `REEL_CATALOG_KEY` (the app's public client config;
+the key must be the publishable one, as it ships inside the app) are
+required.
 `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` sign and `APPLE_ID` /
 `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` notarize, as for the
 Electron build. Without them the app is ad-hoc signed: it runs and
 updates, but Gatekeeper asks on first open, and macOS forgets folder
 permissions after every update (each ad-hoc build is a new identity).
+
+**Keeping a public repo clean**: no keys, `.env` files, certificates or
+private sources are ever committed (the build reads them from the
+environment and the private checkout). The release workflow hands each
+secret only to the step that uses it (`cargo build`, whose build scripts
+are third-party code, gets the public client config and no credential),
+caches nothing built from private
+sources (pull requests aimed at `release` can restore that branch's
+caches), keeps engine compiler output out of the public log, and pins
+every action to a commit. CI runs pull requests with no secrets and a
+read-only token.
 
 **Try the updater locally**: bundle two versions (`REEL_VERSION=0.2.900
 cargo build --release --features cpp-engine`, then `bundle.sh`), serve a

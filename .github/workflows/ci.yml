@@ -1,6 +1,7 @@
 # Checks on every pull request and push to main: format, lints and tests on
-# the Rust engine stand-in. No private checkout here (pull requests from
-# forks get no secrets); the release workflow builds on the C++ engine.
+# the Rust engine stand-in. It runs untrusted code from pull requests, so
+# it never gets a secret or the private engine checkout (the release
+# workflow builds on the C++ engine), and its token can only read.
 name: CI
 
 on:
@@ -26,9 +27,11 @@ jobs:
     env:
       FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/arm64
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
 
@@ -38,7 +41,7 @@ jobs:
       # The same static FFmpeg the release links (shared cache key).
       - name: Cache FFmpeg
         id: ffmpeg
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.FFMPEG_DIR }}
           key: ffmpeg-arm64-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('packaging/macos/build-ffmpeg.sh') }}
@@ -47,7 +50,7 @@ jobs:
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         run: packaging/macos/build-ffmpeg.sh arm64 "$FFMPEG_DIR"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - run: cargo fmt --check
       # Warnings show on the run; only clippy's errors fail it (add
