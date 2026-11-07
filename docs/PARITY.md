@@ -54,9 +54,10 @@ isn't listed.
 - [x] Tab row (icon over label): Media, Audio, Text, Sticker, Effects,
   Transitions, Captions, Filter; sub-nav for tabs with several views
   (Music / Sound / Voiceover, Add text / Text template, …); a view with
-  categories (Video effects, Filter) folds them under its row in the side
-  nav (chevron). *Media, Effects and Filter have content; the others say
-  they're not in the native editor yet.*
+  categories (Video effects, Filter, Music, Sound, Stickers) folds them under
+  its row in the side nav (chevron); a search hides the category highlight.
+  *Transitions, Captions, Voiceover and Text template still say they're
+  not in the native editor yet.*
 - [x] Media: Import button, item count, tile grid sized to the panel
   (min 104 px, 10 px gaps). Import / drop puts files in the library, not
   on the timeline; the library also lists every file the project uses.
@@ -66,9 +67,33 @@ isn't listed.
   badge, hover border + ⊕, click inserts on the main lane at the playhead
   (before the clip whose middle is past it), drag onto the timeline.
   *No context menu.*
-- [ ] Audio: Music (catalog + search), Sound effects, Voiceover (record)
-- [ ] Text: Add text (Default, Draw), Text templates
-- [ ] Stickers: stickers, GIFs (catalog via the media proxy)
+- [~] Audio › Music: the moods in the side nav (Chill first) or a search
+  (settles after 400 ms, Enter at once), from the music API through the
+  app's media proxy (the catalog database's edge function; empty answers
+  asked again twice). Rows: cover with ▶ / ⏸ to listen (streamed, on its
+  own decoder thread), title, artist, M:SS, ⊕ on hover. A click downloads
+  the track (kept in `<data>/library/music/`, so projects play offline),
+  measures it and adds it on the audio lane as the old editor fits it
+  (from the playhead when ≥ 0.5 s of picture is left, else 00:00; no
+  longer than the picture), titled "Song – Artist", selected. *No Import
+  tab (the Media tab imports sound).*
+- [x] Audio › Sound: My sounds (downloaded before, from the metadata kept
+  beside each file), then the library's categories (the first opens), or a
+  search; the same rows; files from the asset host's `sound-effects/`,
+  kept in `<data>/library/sound-effects/`.
+- [ ] Audio › Voiceover (record)
+- [~] Text › Add text: Default text adds a plain caption (Nunito 24,
+  white, centred, no entrance) at the playhead on the text lane, selected,
+  with its words selected in the inspector so typing replaces them. *Draw
+  and Text template aren't ported.*
+- [x] Sticker › Stickers / GIFs: the quick picks (Arrows first … Trending)
+  then the API's own categories, or a search; GIFs: trending or a search.
+  Square tiles sized to the panel (≥ 88 px), the small preview's first
+  frame, playing on hover, ⊕; 30 a page, more as the grid nears its end;
+  Retry when offline. A click adds a 3 s sticker at the playhead on the
+  sticker lane (`<project>-overlay-1`, made on first use above the picture
+  lanes), selected. Tile pictures and sticker files are cached by URL
+  (`cache/remote/`).
 - [~] Effects › Video effects: the served catalog (the catalog database's
   effects table over REST), one category at a time (All, Trending,
   Classic, the mood tabs), 30 rows per request, more as the grid scrolls
@@ -139,10 +164,34 @@ isn't listed.
   formulas) — over the canvas colour or the main clip's Background
   (colour, photo, or its own picture blurred at the four strengths). A
   held Visual slider / field shows live before release. One picture with
-  nothing to place still goes straight to the screen. *Not yet: text,
-  stickers, drawings, transitions, Adjust, cutout, pattern backgrounds,
-  crop straighten.*
-- [ ] Audio playback in sync (mixer, volume, mute, fades)
+  nothing to place still goes straight to the screen. Layers paint by
+  stack order (the clip's `stackOrder`, else its lane's), and the
+  effect-lane clips run right after the last video / photo, so text and
+  stickers above stay unfiltered (as the app and its export do).
+  - Text clips (`text_render.rs`): laid out with cosmic-text (shaping,
+    fallback fonts, wrap at 86 % of the canvas less padding), drawn with
+    tiny-skia: fill + opacity, stroke, glow (two passes past half), drop
+    shadow, background box or per line (merged), underline, letter / line
+    spacing, bold (heavier face), italic (the face, else slanted), curve
+    (an arc, on one line), colour emoji as bitmaps. Font size is in text
+    units of the canvas's short side / 390, so a caption is the same share
+    of the picture at any resolution (the app measured it in preview px).
+    Drawn at the preview's size × the clip's zoom (quarter octaves) and
+    cached by look; a held slider redraws live.
+  - Stickers (`stickers.rs`): the GIF / WebP downloaded, every frame decoded
+    with its delay (≤ 150 frames, ≤ 480 px), premultiplied, looping over
+    the clip; fitted in 40 % of the canvas's short side at zoom 100 %.
+  *Not yet: drawings, transitions, Adjust, cutout, pattern backgrounds,
+  crop straighten, text animations / templates.*
+- [~] Audio playback in sync (`audio.rs`): a cpal output fed from a ring
+  the mixer thread keeps ~120 ms ahead; every audible video / audio clip
+  (clip and lane not muted, not deactivated) decoded by FFmpeg from its
+  source time, resampled linearly to the device rate (speed shifts pitch,
+  as the engine's export does), × volume (linear, to 1000 %) × fades;
+  decoders opened a second before a clip starts. Started at the engine's
+  time on play, restarted if the two drift > 120 ms, stopped on pause.
+  *Not yet: volume keyframes, reversed clips (silent; the app plays a baked
+  reversed copy), freeze frames are silent, pitch-preserving speed.*
 - [x] Timecode `HH:MM:SS:FF | HH:MM:SS:FF` (mono)
 - [x] Transport: ⏮ go to start, ◀ previous frame, ▶/⏸, ▶ next frame,
   ⏭ go to end, each with tooltip + key
@@ -196,21 +245,37 @@ isn't listed.
       Number fields are drag-sideways scrubbers until there's a text
       field.*
   - [ ] Image: Visual · Speed · Animation · Adjust
-  - [ ] Text: Text (Basic, Templates, Fonts, Effects, Bubbles) · Animation ·
-    Visual (Basic)
+  - [~] Text: Text › Basic (`ui/text_panel.rs`): the words (multi-line
+    field, one undo step per run of typing), Font (the app's eight, in a
+    menu), Size 12–46, Pattern B / I / U, Color swatches, Opacity,
+    Alignment; Stroke, Glow, Background (Box / Per line, colour, opacity,
+    roundness, height, width), Shadow (colour, opacity, blur, distance,
+    angle) each switched at its title; Spacing (letter, line); Curve.
+    Visual › Basic as on pictures. *Not yet: the "Aa" presets row,
+    Templates, Fonts, Effects, Bubbles, Animation; custom colours.*
   - [ ] Caption: Text (Basic, Fonts, Effects, Bubbles) · Captions (edit
     list) · Animation
-  - [ ] Audio: Volume, Beats, Duration
+  - [~] Audio (and a video's Audio tab): Volume › Volume — slider with
+    100 % at its middle (to 1000 %), read-out, mute, reset (setting a
+    level unmutes) — and Fade in / Fade out (0.1 s steps, each side at most
+    10 s and never over the other). *Beats and Duration aren't ported;
+    no keyframed volume.*
   - [x] Effect: Effects › Adjust only, no second grid (looks are picked
     in the browser): the effect's preview + name with Replace (opens the
     browser's Video effects, where a pick replaces it), then Reset + its
     sliders. An effect the catalog hasn't seen is fetched by name for its
     sliders.
-  - [ ] Sticker: Visual (Basic) · Drawing: Animation
+  - [x] Sticker: Visual (Basic).
+  - [ ] Drawing: Animation
 - [~] Shared controls: section heading with reset, label row, slider row
   (any slider: drag anywhere, live value, commit on release), read-out box,
-  segment pills. *No editable number field (needs a text field), select,
-  colour swatches or keyframe ◇ yet.*
+  segment pills, colour swatches, keyframe ◇. A native text field
+  (`ui/text_input.rs`: one line or soft-wrapped lines, caret, selection,
+  mouse / word / line moves, copy / cut / paste, IME through the platform
+  input handler, Esc gives the keyboard back); the editor's shortcuts are
+  bound in `Editor && !TextInput`, so typing never triggers them. *Number
+  fields don't take typing yet; no select widget (the Font menu is a
+  popup).*
 - [ ] AI agent panel (providers, key vault, chat, tools, `look`), shown in
   the inspector slot
 
@@ -330,8 +395,13 @@ isn't listed.
 - [x] Undo/redo: document snapshots, one step per gesture (a quick run of
   edits to the same thing merges, 400 ms, 200 steps). *Split doesn't yet
   split keyframes / motion paths / speed curves per half.*
-- [ ] Keyframes, transforms, masks, crop, adjust, transitions, text, stickers, drawings, captions, audio volume/fades,
-  speed curves, freeze, reverse (baked copy), extract audio
+- [x] Text clips, stickers, library sound on the document: the text lane
+  (`<project>-text-1`) and sticker lane (`<project>-overlay-1`) made on
+  first use above the picture lanes (`layerStack` set); text style fields
+  as the app's (unset = its default); `sourceWidth/Height` on stickers;
+  `title`, `volume`, `muted`, `audioFade` on audio.
+- [ ] Keyframes, transforms, masks, crop, adjust, transitions, drawings,
+  captions, speed curves, freeze, reverse (baked copy), extract audio
 - [ ] Media relink for projects from the web app
 
 ## Export
@@ -370,13 +440,16 @@ items, tooltips and the dialog.
 
 ## Still to build next (in order)
 
-1. A native single-line text field (GPUI has none built in): project
-   rename, editable number fields, search, text clips.
+1. Use the new text field for project rename and typed number fields.
 2. Timeline leftovers: the cover editor; group move of a multi-selection;
    Graphs badge and tracked-path diamonds.
-3. Inspector panels on the real document fields: Volume, Adjust
-   (Visual is done).
-4. Audio playback, then the compositor (all layers), then export.
+3. Inspector panels on the real document fields: Adjust; Text's
+   Templates / Fonts / Effects / Bubbles / Animation; Audio's Beats and
+   Duration.
+4. Browser: Transitions (picker + the compositor's transition passes),
+   Captions (upload .srt/.vtt, caption styles; auto captions need a
+   speech model), Voiceover, Text templates.
+5. Export.
 
 ## Platform
 

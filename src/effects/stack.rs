@@ -80,6 +80,9 @@ pub struct Placement {
     pub mask: Option<MaskPlan>,
     /// Splice: index in `visual::BLEND_MODES` (0 normal).
     pub blend: u32,
+    /// The picture's own size on the canvas at scale 1 (canvas widths,
+    /// heights) instead of contain-fitting it: text and stickers.
+    pub natural: Option<[f32; 2]>,
 }
 
 impl Default for Placement {
@@ -95,6 +98,7 @@ impl Default for Placement {
             crop: [0., 0., 1., 1.],
             mask: None,
             blend: 0,
+            natural: None,
         }
     }
 }
@@ -131,8 +135,11 @@ pub struct CanvasPasses {
     /// Straight RGBA 0–1.
     pub background: [f32; 4],
     pub backdrop: Option<Backdrop>,
-    /// The effect-lane clips, over everything.
+    /// The effect-lane clips, over the footage: they run once this many
+    /// layers are composed (after the last video / photo), so text and
+    /// stickers above stay unfiltered.
     pub passes: Vec<Pass>,
+    pub passes_after: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -353,12 +360,17 @@ pub fn build(
         && backdrop.is_none()
         && background == canvas_colour;
     if (!plain && !stack.layers.is_empty()) || !global.is_empty() {
+        let passes_after = layers
+            .iter()
+            .rposition(|(c, _)| c.kind == "video" || c.kind == "image")
+            .map_or(0, |i| i + 1);
         stack.canvas = Some(CanvasPasses {
             width: canvas_px.0,
             height: canvas_px.1,
             background,
             backdrop,
             passes: global,
+            passes_after,
         });
     }
     stack

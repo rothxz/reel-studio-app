@@ -79,6 +79,13 @@ src/assets.rs      the asset host (R2): URLs, disk cache, the tile picture
                    workers (download + decode, first frame / animation)
 src/catalog.rs     served video effects (catalog database REST, paged per
                    tab, disk copy) + the compiled-in filter list
+src/library.rs     online libraries: stickers / GIFs + music through the
+                   media proxy, sound effects (table + asset host),
+                   downloads kept in <data>/library/
+src/stickers.rs    sticker / GIF frames for the player (decode, loop)
+src/text_render.rs text clips drawn as pictures (cosmic-text + tiny-skia)
+src/audio.rs       sound out (cpal): timeline mixer in step with the
+                   engine, library previews
 src/effects/       video effects + filters in the preview: shader packages
                    (download, hash check, cache), the passes at a time
                    (stack), Metal source (msl: the effect dialect →
@@ -88,6 +95,8 @@ src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono)
 src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    header, home, browser, fx (effect / filter grids, the
                    effect clip's settings, Adjust sliders, their edits),
+                   library (Audio / Text / Sticker views), text_input (the
+                   text field), text_panel, audio_panel,
                    player, inspector, toolbar,
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),

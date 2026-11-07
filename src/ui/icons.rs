@@ -143,6 +143,13 @@ icons! {
     MaskMirror => (MDI, 0xf11d8),
     CircleOutline => (MDI, 0xf0766),
     RectangleOutline => (MDI, 0xf0e5f),
+    FormatBold => (MDI, 0xf0264),
+    FormatItalic => (MDI, 0xf0277),
+    FormatUnderline => (MDI, 0xf0287),
+    AlignLeft => (MDI, 0xf0262),
+    AlignCenter => (MDI, 0xf0260),
+    AlignRight => (MDI, 0xf0263),
+    Brush => (MDI, 0xf00e3),
     HeartOutline => (MDI, 0xf02d5),
     StarOutline => (MDI, 0xf04d2),
 }

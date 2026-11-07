@@ -68,13 +68,14 @@ pub const BROWSER_TABS: &[BrowserTab] = &[
 pub const EFFECTS_TAB: usize = 4;
 pub const FILTER_TAB: usize = 7;
 
-/// The categories a browser view lists in the side nav, under its row.
-pub fn view_categories(tab: usize, view: usize) -> &'static [(&'static str, &'static str)] {
-    match (tab, view) {
-        (EFFECTS_TAB, 0) => crate::catalog::EFFECT_TABS,
-        (FILTER_TAB, 0) => crate::catalog::FILTER_TABS,
-        _ => &[],
-    }
+/// Views whose categories open under their row in the side nav (some
+/// arrive from the network, so the row folds even before they do).
+fn nested_view(tab: usize, view: usize) -> bool {
+    use crate::ui::library::{AUDIO_TAB, STICKER_TAB};
+    matches!(
+        (tab, view),
+        (EFFECTS_TAB, 0) | (FILTER_TAB, 0) | (AUDIO_TAB, 0) | (AUDIO_TAB, 1) | (STICKER_TAB, 0)
+    )
 }
 
 const TAB_MIN_WIDTH: f32 = 54.;
@@ -151,9 +152,13 @@ impl Editor {
                     )
             }));
 
-        let nested = |v: usize| !view_categories(tab_ix, v).is_empty();
+        let nested = |v: usize| nested_view(tab_ix, v);
         let show_subnav = tab.views.len() > 1 || (0..tab.views.len()).any(nested);
-        let category_ix = self.browser_categories[tab_ix];
+        let category_ix = if self.view_searching(tab_ix, view_ix) {
+            usize::MAX
+        } else {
+            self.browser_categories[tab_ix]
+        };
         let subnav = show_subnav.then(|| {
             div()
                 .id("browser-subnav")
@@ -168,8 +173,12 @@ impl Editor {
                 .border_color(theme::card_border())
                 .children(tab.views.iter().enumerate().map(|(i, label)| {
                     let on = i == view_ix;
-                    let categories = view_categories(tab_ix, i);
-                    let group = !categories.is_empty();
+                    let categories = if on {
+                        self.view_categories(tab_ix, i)
+                    } else {
+                        vec![]
+                    };
+                    let group = nested_view(tab_ix, i);
                     div()
                         .flex()
                         .flex_col()
@@ -192,7 +201,12 @@ impl Editor {
                                         .hover(|s| s.bg(theme::fill_subtle()))
                                 })
                                 .on_click(cx.listener(move |ed, _, _, cx| {
-                                    ed.browser_views[tab_ix] = i;
+                                    if ed.browser_views[tab_ix] != i {
+                                        ed.browser_views[tab_ix] = i;
+                                        ed.browser_categories[tab_ix] =
+                                            Editor::default_category(tab_ix, i);
+                                        ed.lib.scroll.set_offset(gpui::Point::default());
+                                    }
                                     cx.notify();
                                 }))
                                 .child(div().flex_1().min_w_0().truncate().child(*label))
@@ -216,7 +230,7 @@ impl Editor {
                         )
                         // The shown view's categories, folded under it.
                         .when(on, |d| {
-                            d.children(categories.iter().enumerate().map(|(j, (_, name))| {
+                            d.children(categories.iter().enumerate().map(|(j, name)| {
                                 let shown = j == category_ix;
                                 div()
                                     .id(("browser-category", j))
@@ -227,7 +241,7 @@ impl Editor {
                                     .rounded(px(5.))
                                     .cursor_pointer()
                                     .text_size(px(theme::XS))
-                                    .child(div().truncate().child(*name))
+                                    .child(div().truncate().child(name.clone()))
                                     .when(shown, |d| {
                                         d.bg(theme::fill_subtle())
                                             .text_color(theme::text())
@@ -240,6 +254,9 @@ impl Editor {
                                     .on_click(cx.listener(move |ed, _, _, cx| {
                                         ed.browser_categories[tab_ix] = j;
                                         ed.fx_scroll.set_offset(gpui::Point::default());
+                                        ed.lib.scroll.set_offset(gpui::Point::default());
+                                        // A category replaces a search.
+                                        ed.clear_view_search(tab_ix, cx);
                                         cx.notify();
                                     }))
                             }))
@@ -247,8 +264,15 @@ impl Editor {
                 }))
         });
 
+        use crate::library::StickerKind;
+        use crate::ui::library::{AUDIO_TAB, STICKER_TAB, TEXT_TAB};
         let body = match (tab_ix, view_ix) {
             (0, _) => self.render_media_library(cx).into_any_element(),
+            (AUDIO_TAB, 0) => self.render_music_view(cx),
+            (AUDIO_TAB, 1) => self.render_sound_view(cx),
+            (TEXT_TAB, 0) => self.render_add_text_view(cx),
+            (STICKER_TAB, 0) => self.render_sticker_view(StickerKind::Stickers, cx),
+            (STICKER_TAB, 1) => self.render_sticker_view(StickerKind::Gifs, cx),
             (EFFECTS_TAB, 0) => self.render_effects_view(cx),
             (FILTER_TAB, 0) => self.render_filters_view(cx),
             _ => not_yet(tab.views[view_ix]).into_any_element(),

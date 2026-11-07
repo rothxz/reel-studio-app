@@ -23,6 +23,11 @@ use image::{AnimationDecoder, DynamicImage, Frame, ImageFormat, Rgba};
 pub const EFFECT_PREVIEWS: &str = "effect-previews";
 /// Effect and filter shaders (`effects/…`, `filters/…`), as data.
 pub const EFFECT_PACKAGES: &str = "effect-packages";
+/// The sound effects library's files (keys from its table).
+pub const SOUND_EFFECTS: &str = "sound-effects";
+/// Not a bucket: keys are whole URLs elsewhere (sticker and GIF files,
+/// album covers), cached under a hash of the URL.
+pub const REMOTE: &str = "remote";
 
 const WORKERS: usize = 4;
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -81,29 +86,111 @@ pub fn agent() -> &'static ureq::Agent {
     })
 }
 
-/// The bytes of `key`: from the disk cache, else downloaded (and cached).
-pub fn fetch(bucket: &str, key: &str) -> Result<Vec<u8>> {
-    let path = cache_path(bucket, key);
-    if let Ok(bytes) = std::fs::read(&path) {
-        return Ok(bytes);
+/// Where a download of a whole URL is kept: a hash of it, with the URL's
+/// file extension (decoders and FFmpeg go by it).
+fn remote_path(url: &str) -> PathBuf {
+    // FNV-1a, 64 bit: stable across runs and builds.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in url.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
     }
-    let Some(url) = url(bucket, key) else {
-        bail!("no asset host configured");
+    let name = url.split(['?', '#']).next().unwrap_or("");
+    let ext = name
+        .rsplit_once('/')
+        .map_or(name, |(_, last)| last)
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()));
+    let file = match ext {
+        Some(e) => format!("{h:016x}.{e}"),
+        None => format!("{h:016x}"),
     };
-    let mut response = agent().get(&url).call().with_context(|| url.clone())?;
+    crate::prefs::data_dir()
+        .join("cache")
+        .join(REMOTE)
+        .join(file)
+}
+
+/// Downloads `url` to `path` (written aside, then renamed: a half-written
+/// file never looks cached).
+fn download_to(url: &str, path: &std::path::Path, limit: u64) -> Result<Vec<u8>> {
+    let agent = if limit > 32 << 20 {
+        download_agent()
+    } else {
+        agent()
+    };
+    let mut response = agent.get(url).call().with_context(|| url.to_string())?;
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(32 << 20)
+        .limit(limit)
         .read_to_vec()?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // Written aside, then renamed: a half-written file never looks cached.
     let tmp = path.with_extension(format!("part{}", std::process::id()));
     std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, &path)?;
+    std::fs::rename(&tmp, path)?;
     Ok(bytes)
+}
+
+/// An agent for big downloads (a song, a sound): the same, but given
+/// minutes rather than seconds to finish.
+pub fn download_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(TIMEOUT))
+                .timeout_global(Some(Duration::from_secs(600)))
+                .build(),
+        )
+    })
+}
+
+/// The bytes of `key`: from the disk cache, else downloaded (and cached).
+/// In `REMOTE` the key is the URL itself.
+pub fn fetch(bucket: &str, key: &str) -> Result<Vec<u8>> {
+    let path = if bucket == REMOTE {
+        remote_path(key)
+    } else {
+        cache_path(bucket, key)
+    };
+    if let Ok(bytes) = std::fs::read(&path) {
+        return Ok(bytes);
+    }
+    let url = if bucket == REMOTE {
+        key.to_string()
+    } else {
+        match url(bucket, key) {
+            Some(u) => u,
+            None => bail!("no asset host configured"),
+        }
+    };
+    download_to(&url, &path, 32 << 20)
+}
+
+/// A local copy of `key` (see `fetch`), for things read by path (sound
+/// through FFmpeg). Blocking: run it off the UI thread.
+pub fn fetch_file(bucket: &str, key: &str) -> Result<PathBuf> {
+    let path = if bucket == REMOTE {
+        remote_path(key)
+    } else {
+        cache_path(bucket, key)
+    };
+    if !path.exists() {
+        let url = if bucket == REMOTE {
+            key.to_string()
+        } else {
+            match url(bucket, key) {
+                Some(u) => u,
+                None => bail!("no asset host configured"),
+            }
+        };
+        download_to(&url, &path, 256 << 20)?;
+    }
+    Ok(path)
 }
 
 /// RGBA → BGRA, as GPUI's atlas wants.
@@ -219,6 +306,15 @@ mod tests {
     fn keys_are_encoded_per_segment() {
         assert_eq!(encode_segment("milk tea-1.jpg"), "milk%20tea-1.jpg");
         assert_eq!(encode_segment("B&W"), "B%26W");
+    }
+
+    #[test]
+    fn remote_paths_keep_the_extension() {
+        let p = remote_path("https://x.test/a/b/qSaImyCY.gif?x=1");
+        assert_eq!(p.extension().unwrap(), "gif");
+        assert_ne!(p, remote_path("https://x.test/a/b/other.gif"));
+        let q = remote_path("https://x.test/?trackid=2&format=mp32");
+        assert!(q.extension().is_none());
     }
 
     #[test]
