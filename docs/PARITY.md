@@ -29,11 +29,16 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [ ] Settings dialog (language, appearance, storage, updates).
+- [~] Settings dialog: Updates and About (version). *No language,
+  appearance or storage yet.*
 - [~] Toasts (single slot, 1.6 s, as the old app), confirm dialog, popup
   menus. *No blocking progress dialog yet.*
-- [ ] Auto-update + installers (mac dmg/zip, Windows, Linux) to replace
-  electron-builder / electron-updater.
+- [~] Auto-update + installers to replace electron-builder /
+  electron-updater: macOS done (dmg + zip, signed / notarized when the
+  secrets are set, `native-v…` releases from `release.yml`; check on
+  launch + every 4 h, Download, Restart now / Later installs on quit).
+  *Windows, Linux to do; moving Electron users onto the native app is
+  still to decide.*
 
 ## Header
 
@@ -224,12 +229,38 @@ isn't listed.
   rate, Duration, Clips) and Modify → ratio menu.
 - [x] Clip selected: the tab row and sub-tab pills per kind from one
   table (`ui/inspector.rs`), the open sub-tab kept across clips that have
-  it, else the clip's first. *Panels are placeholders except Speed ›
-  Normal.*
+  it, else the clip's first. *Placeholders left: Animation (clip,
+  text, drawing), Text's Templates / Fonts / Effects / Bubbles, Audio's
+  Beats / Duration.*
 - [~] Tabbed inspector per kind (`inspectorTabs.ts`). *Tabs done; panels:*
-  - [~] Video: Visual ✓ · Audio (Volume) · Speed (Normal ✓, Curve) ·
-    Animation · Adjust. *Speed › Normal: log slider 0.1–100× snapping to
-    1×, read-out, length before → after, reset; one undo step per drag.*
+  - [~] Video: Visual ✓ · Audio (Volume) · Speed (Normal ✓, Curve ✓) ·
+    Animation · Adjust ✓. *Speed › Normal: log slider 0.1–100× snapping to
+    1×, read-out, length before → after, reset; one undo step per drag;
+    a constant speed drops any curve.*
+    - [x] Speed › Curve (`ui/speed_curve.rs`, document side
+      `speed_curve.rs`): None, Custom and six ramp tiles with their
+      shapes; with one on, a card: name, length before → after, the
+      graph (0.1× / 1× / 10×, the playhead's line), beats to drag (ends
+      move up / down only), Speed at the playhead, Reset, Add / Delete
+      beat at the playhead. Each pick / release is one undo step that
+      re-times the clip to the ramp's average speed (`speedCurve` +
+      `speed`, the app's JSON; the engine plays it) and the magnet
+      closes up the main lane. Timeline tag: the ramp's name. *Not yet:
+      keyframes / motion path re-timed with the clip (also not on a
+      Normal speed change), the per-half curve on Split, the card's play
+      button, beat snapping.*
+    - [~] Adjust (`ui/adjust_panel.rs`, document side `adjust.rs`): the
+      clip's filter (name, delete, Intensity, the player following the
+      held slider), then Adjust with Reset (the effect and its
+      keyframes, one step) and the Color (Temperature, Tint, Saturation,
+      Hue) / Lightness (Exposure, Brightness, Contrast) sliders as an
+      "Adjust" effect; keyframed sliders key the playhead and show its
+      values. The player draws it with the engine's matrix
+      (`reel_adjust_color_matrix`), inside a Classic filter, after a
+      packaged one, keyframes evaluated, live while dragged. *Not yet:
+      Auto adjust (measure a few frames), the coloured tracks of
+      Temperature / Tint / Saturation / Hue; the Rust stand-in engine
+      shows no Adjust.*
     Visual (`ui/visual.rs`, document side `visual.rs`), each control one
     undo step:
     - [x] Basic: Transform (Zoom slider to 400 % / field to 10 000 %,
@@ -260,7 +291,9 @@ isn't listed.
     - *All of it shows in the player (see Compositor) except Remove BG.
       Number fields are drag-sideways scrubbers until there's a text
       field.*
-  - [ ] Image: Visual · Speed · Animation · Adjust
+  - [~] Image: Visual ✓ · Speed ✓ (like the old editor, "Select a video
+    clip first": a photo's length is trimmed, not sped) · Animation ·
+    Adjust ✓ (no Auto adjust on a photo, as before)
   - [~] Text: Text › Basic (`ui/text_panel.rs`): the words (multi-line
     field, one undo step per run of typing), Font (the app's eight, in a
     menu), Size 12–46, Pattern B / I / U, Color swatches, Opacity,
@@ -495,4 +528,6 @@ items, tooltips and the dialog.
 - [x] macOS (Apple Silicon) builds and runs
 - [ ] Windows, Linux builds (GPUI supports both; FFmpeg + engine backends)
 - [ ] Khmer / Vietnamese / Chinese / Indonesian UI strings and fonts
-- [ ] Bundled FFmpeg (LGPL, trimmed) instead of Homebrew dylibs
+- [x] Bundled FFmpeg (LGPL, static, decode only) instead of Homebrew dylibs
+  in released apps (`packaging/macos/build-ffmpeg.sh`)
+- [x] CI: fmt, clippy, tests on every pull request (`ci.yml`)

@@ -1248,11 +1248,7 @@ impl Editor {
                                     .px(px(3.))
                                     .rounded(px(3.))
                                     .bg(rgba(0x00000080))
-                                    .child(mono(
-                                        format!("{}×", clip.speed),
-                                        theme::XXS,
-                                        theme::text(),
-                                    )),
+                                    .child(mono(speed_badge(clip), theme::XXS, theme::text())),
                             )
                         })
                         .child(
@@ -2034,4 +2030,19 @@ mod tests {
         assert_eq!(ruler_label(2.), "00:02");
         assert_eq!(ruler_label(61.5), "01:01.5");
     }
+}
+
+/// A sped clip's tag: its ramp's name, else its speed ("2×", "0.45×").
+fn speed_badge(clip: &Clip) -> String {
+    if let Some(c) = clip.speed_curve() {
+        return crate::speed_curve::label(&c.preset).to_string();
+    }
+    let s = clip.speed;
+    let text = if s < 1. {
+        format!("{s:.2}")
+    } else {
+        format!("{s:.1}")
+    };
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}×")
 }

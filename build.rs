@@ -17,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=REEL_APP_DIR");
     println!("cargo:rerun-if-changed=engine-shim/reel_engine.cpp");
     app_inputs();
+    release_inputs();
+    static_ffmpeg();
     if std::env::var_os("CARGO_FEATURE_CPP_ENGINE").is_none() {
         return;
     }
@@ -98,6 +100,78 @@ fn app_inputs() {
     std::fs::write(out.join("filter_catalog.json"), catalog).unwrap();
     std::fs::write(out.join("filter_previews.json"), previews).unwrap();
     std::fs::write(out.join("filter_packages.json"), packages).unwrap();
+}
+
+/// What a release build stamps in (the release workflow exports both):
+/// REEL_VERSION, the version the app reports and the updater compares
+/// (default: Cargo.toml's), and REEL_UPDATE_REPO, the public GitHub repo
+/// whose releases it updates from.
+fn release_inputs() {
+    for (key, default) in [
+        ("REEL_VERSION", std::env::var("CARGO_PKG_VERSION").unwrap()),
+        ("REEL_UPDATE_REPO", "rothxz/reel-studio-app".to_string()),
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+        let value = std::env::var(key)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or(default);
+        println!("cargo:rustc-env={key}={value}");
+    }
+}
+
+/// A static FFmpeg (FFMPEG_DIR from packaging/macos/build-ffmpeg.sh, the
+/// release build): ffmpeg-sys-next links its libraries, but not what they
+/// need from the system, which FFmpeg lists in its pkg-config files
+/// (frameworks, -lz, -lbz2…). A shared FFmpeg (Homebrew, development)
+/// needs nothing here.
+fn static_ffmpeg() {
+    println!("cargo:rerun-if-env-changed=FFMPEG_DIR");
+    let Some(dir) = std::env::var_os("FFMPEG_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let lib = dir.join("lib");
+    if !lib.join("libavcodec.a").exists() || lib.join("libavcodec.dylib").exists() {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for pc in [
+        "libavdevice",
+        "libavfilter",
+        "libavformat",
+        "libavcodec",
+        "libswresample",
+        "libswscale",
+        "libavutil",
+    ] {
+        let path = lib.join("pkgconfig").join(format!("{pc}.pc"));
+        let Some(text) = watched_read(&path) else {
+            continue;
+        };
+        // A static-only FFmpeg lists them under `Libs:`, a shared one under
+        // `Libs.private:`.
+        let libs: String = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("Libs:").or(l.strip_prefix("Libs.private:")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut words = libs.split_whitespace();
+        while let Some(word) = words.next() {
+            let link = if word == "-framework" {
+                words.next().map(|f| format!("framework={f}"))
+            } else if let Some(name) = word.strip_prefix("-l") {
+                // FFmpeg's own libraries come from ffmpeg-sys-next.
+                (!name.starts_with("av") && !name.starts_with("sw")).then(|| name.to_string())
+            } else {
+                None
+            };
+            if let Some(link) = link
+                && seen.insert(link.clone())
+            {
+                println!("cargo:rustc-link-lib={link}");
+            }
+        }
+    }
 }
 
 fn watched_read(path: &Path) -> Option<String> {

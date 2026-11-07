@@ -2,8 +2,9 @@
 
 The desktop editor, reimplemented as a native Rust app on
 [GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor), to
-replace the Electron build. Until it ships, releases on this repo are still
-the Electron build.
+replace the Electron build. Until it ships, the `v…` releases on this repo
+(marked Latest) are still the Electron build; the native app publishes
+`native-v…` pre-releases next to them (see Releases below).
 
 ![Media library, player, inspector and timeline](screenshot.jpg)
 
@@ -99,7 +100,7 @@ panel, sheet and gesture is a rewrite in Rust. The biggest items:
 | AI tools (captions, Remove BG, …) | Transformers.js workers | `ort` / `candle`, or the native models the phone apps already use |
 | Widgets (inputs, sliders, menus, dialogs) | React components | `gpui-component` (0.9) covers most; GPUI is still pre-1.0 and its API moves. |
 | Languages incl. Khmer | i18n + Kantumruy Pro | Bundle fonts; GPUI shapes text with Core Text / DirectWrite, so Khmer should work but is unverified. |
-| Auto-update, installers | electron-builder + electron-updater | `cargo-packager` (or similar) + an updater; the release workflow changes. |
+| Auto-update, installers | electron-builder + electron-updater | Done for macOS: `packaging/macos/bundle.sh` (app, dmg, zip), `src/updater.rs`, `.github/workflows/release.yml`. Windows / Linux still to do. |
 
 **Suggested path if we go ahead:**
 
@@ -127,3 +128,53 @@ src/ui/            panels: header, home, browser, player, inspector,
 engine-shim/       C ABI over videoengine::Engine (compiled by build.rs)
 assets/fonts/      bundled fonts (OFL / MIT / Apache, see README there)
 ```
+
+## Releases
+
+Merging into the **`release`** branch (a pull request from `main`) runs
+`.github/workflows/release.yml`, the counterpart of the Electron build's
+release workflow (which releases on merges into its own branch); it can
+also be run by hand from the Actions tab. Day-to-day merges into `main`
+only run CI.
+
+1. **build** (arm64, and x64 cross-built, on a macOS runner): the static
+   LGPL FFmpeg (`packaging/macos/build-ffmpeg.sh`, cached), then
+   `cargo build --release --features cpp-engine` against a sparse checkout
+   of the private app repo (engine + filter data only), then
+   `packaging/macos/bundle.sh`: `Reel Studio.app` (same bundle id as the
+   Electron build, `com.reelstudio.desktop`), signed, notarized and
+   stapled when the secrets are set, as a `.zip` (for the updater) and a
+   `.dmg`.
+2. **release**: `update.json` (`packaging/update-manifest.sh`: version,
+   per-platform url + SHA-256 + size), then a GitHub Release
+   `native-v<version>` on this repo, `--latest=false` and a pre-release,
+   so the Electron app's updater (which follows the release marked Latest)
+   is untouched. `update.json` is uploaded last, so the updater never sees
+   a half-uploaded release.
+
+Version = Cargo.toml's `major.minor` + the run number (`0.2.0` → `0.2.57`).
+CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on the Rust
+stand-in for every pull request.
+
+**Auto-update** (`src/updater.rs`), as the old app: checks 5 s after launch
+and every 4 h, never downloads on its own (Settings → App updates →
+Download), then asks to restart; Later installs on quit. A download must
+match `update.json`'s SHA-256, be our bundle id at the promised version
+with a valid signature, and (when this app has a team) be signed by the
+same team. Only an installed bundle in a writable folder updates (not
+`cargo run`, not a quarantine copy).
+
+**Secrets** (repo settings): `REEL_STUDIO_TOKEN` (fine-grained, Contents:
+read on the private app repo), `REEL_ASSETS_URL` / `REEL_CATALOG_URL` /
+`REEL_CATALOG_KEY` (the app's public client config) are required.
+`MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` sign and `APPLE_ID` /
+`APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` notarize, as for the
+Electron build. Without them the app is ad-hoc signed: it runs and
+updates, but Gatekeeper asks on first open, and macOS forgets folder
+permissions after every update (each ad-hoc build is a new identity).
+
+**Try the updater locally**: bundle two versions (`REEL_VERSION=0.2.900
+cargo build --release --features cpp-engine`, then `bundle.sh`), serve a
+folder with the newer zip, its `update.json` and a `releases.json` in the
+GitHub API's shape, and launch the older app's binary with
+`REEL_UPDATE_FEED=http://127.0.0.1:<port>/releases.json`.

@@ -70,11 +70,25 @@ impl Editor {
                     .flex_none()
                     .h(px(HEADER_HEIGHT))
                     .when(!full_screen, |d| d.pl(px(80.)))
+                    .pr(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_end()
                     .on_click(|e, window, _| {
                         if e.click_count() == 2 {
                             window.titlebar_double_click();
                         }
-                    }),
+                    })
+                    // Settings (the old app's sidebar entry).
+                    .child(
+                        crate::ui::widgets::icon_button(
+                            "home-settings",
+                            Icon::Settings,
+                            "Settings",
+                        )
+                        .size(18.)
+                        .on_click(cx.listener(|ed, _, _, cx| ed.open_settings(false, cx))),
+                    ),
             )
             .child(
                 div()

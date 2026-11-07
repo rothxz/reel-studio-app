@@ -1,0 +1,59 @@
+# Checks on every pull request and push to main: format, lints and tests on
+# the Rust engine stand-in. No private checkout here (pull requests from
+# forks get no secrets); the release workflow builds on the C++ engine.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: macos-latest
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Metal toolchain
+        run: xcrun -f metal > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+      # The same static FFmpeg the release links (shared cache key).
+      - name: Cache FFmpeg
+        id: ffmpeg
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.FFMPEG_DIR }}
+          key: ffmpeg-arm64-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('packaging/macos/build-ffmpeg.sh') }}
+
+      - name: Build FFmpeg (static, LGPL)
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: packaging/macos/build-ffmpeg.sh arm64 "$FFMPEG_DIR"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      # Warnings show on the run; only clippy's errors fail it (add
+      # `-- -D warnings` once the existing ones are cleaned up).
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked
+
+      - name: Check packaging scripts
+        run: bash -n packaging/macos/*.sh packaging/*.sh

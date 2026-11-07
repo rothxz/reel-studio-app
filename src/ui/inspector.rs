@@ -146,8 +146,8 @@ pub fn tabs_for(kind: &str) -> &'static [Tab] {
 }
 
 /// The speed slider runs in log10 space, 0.1×–100×.
-const MIN_SPEED: f64 = 0.1;
-const MAX_SPEED: f64 = 100.;
+pub const MIN_SPEED: f64 = 0.1;
+pub const MAX_SPEED: f64 = 100.;
 
 fn speed_to_fraction(speed: f64) -> f32 {
     let (lo, hi) = (MIN_SPEED.log10(), MAX_SPEED.log10());
@@ -171,7 +171,7 @@ fn fraction_to_speed(f: f32) -> f64 {
     }
 }
 
-fn secs(t: i64) -> String {
+pub(crate) fn secs(t: i64) -> String {
     format!("{:.1}s", t as f64 / SECOND as f64)
 }
 
@@ -355,6 +355,9 @@ impl Editor {
         let body = match current {
             _ if layers => self.render_layers_panel(cx),
             Some("speed") => self.render_speed_panel(clip, cx).into_any_element(),
+            Some("speedCurve") => self.render_speed_curve_panel(clip, cx),
+            Some("imageSpeed") => self.render_image_speed_panel(),
+            Some("adjust") => self.render_adjust_panel(clip, cx),
             Some("basic") => self.render_basic_panel(clip, cx),
             Some("rotate") => self.render_rotate_panel(clip, main_lane, cx),
             Some("removeBg") => self.render_cutout_panel(clip, cx),

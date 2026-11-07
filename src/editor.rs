@@ -39,7 +39,15 @@ use crate::ui::timeline_edit::{ClipDrag, KeyframeDrag, Marquee, MediaDrop};
 
 actions!(
     editor,
-    [ImportMedia, OpenProject, SaveProject, SaveProjectAs, Quit]
+    [
+        ImportMedia,
+        OpenProject,
+        SaveProject,
+        SaveProjectAs,
+        Quit,
+        OpenSettings,
+        CheckForUpdates
+    ]
 );
 
 /// Preview frames are decoded at most this wide (the player is ~800 px).
@@ -141,6 +149,8 @@ pub enum Drag {
     Crop(Box<crate::ui::crop::CropDrag>),
     /// A tile held in the Layers panel (`ui/layers.rs`).
     Layer(Box<crate::ui::layers::LayerDrag>),
+    /// A beat held on the Speed › Curve graph (`ui/speed_curve.rs`).
+    Beat(Box<crate::ui::speed_curve::BeatDrag>),
 }
 
 /// A picture the player shows: its clip, and the frame server decoding it.
@@ -271,6 +281,11 @@ pub struct Editor {
 
     pub(crate) fullscreen: bool,
     pub(crate) shortcuts_open: bool,
+    /// Settings, and the app updater it shows.
+    pub(crate) settings_open: bool,
+    pub(crate) updater: gpui::Entity<crate::updater::Updater>,
+    /// The downloaded version whose restart prompt got "Later".
+    pub(crate) update_later_for: Option<SharedString>,
     pub(crate) popup: Option<Popup>,
     pub(crate) drag: Option<Drag>,
     /// A slider's value while it is dragged (committed on release).
@@ -443,6 +458,8 @@ impl Editor {
             ed.on_text_field(ev, cx)
         })
         .detach();
+        let updater = crate::updater::Updater::new(cx);
+        cx.observe(&updater, |_, _, cx| cx.notify()).detach();
         let project = Project::empty();
         let mut engine = Engine::new();
         if let Err(e) = engine.load(&project) {
@@ -468,6 +485,9 @@ impl Editor {
             autosave_token: 0,
             fullscreen: false,
             shortcuts_open: false,
+            settings_open: false,
+            updater,
+            update_later_for: None,
             popup: None,
             drag: None,
             live_value: None,
@@ -1146,6 +1166,19 @@ impl Editor {
             }
             return;
         }
+        if self.restart_prompt_open(cx) {
+            if id == Shortcut::Deselect {
+                self.update_later(cx);
+            }
+            return;
+        }
+        if self.settings_open {
+            if id == Shortcut::Deselect {
+                self.settings_open = false;
+                cx.notify();
+            }
+            return;
+        }
         if self.screen == Screen::Home && id != Shortcut::ShowShortcuts {
             return;
         }
@@ -1513,11 +1546,26 @@ impl Editor {
             "Change Speed",
             main,
             Some(format!("speed:{id}")),
-            |p| {
-                let changed = p.find_clip(&id).is_some_and(|(_, c)| c.speed != speed);
-                p.set_speed(&id, speed);
-                changed
-            },
+            |p| p.set_speed(&id, speed),
+            cx,
+        );
+    }
+
+    /// Speed › Curve: a ramp on the clip (None: back to 1×), re-timing it;
+    /// on the main lane the clips after it close up. One undo step each.
+    pub fn set_speed_curve(
+        &mut self,
+        clip_id: &str,
+        curve: Option<crate::speed_curve::SpeedCurve>,
+        cx: &mut Context<Self>,
+    ) {
+        let id = clip_id.to_string();
+        let main = self.on_main_lane(&id);
+        self.edit(
+            "Speed Curve",
+            main,
+            None,
+            |p| p.retime_clip(&id, 1., curve),
             cx,
         );
     }
@@ -2050,6 +2098,7 @@ impl Editor {
                 packages: &self.packages,
                 effect_key: &effect_key,
                 filter_matrix: &engine::filter_color_matrix,
+                adjust_matrix: &|c: &Clip| self.adjust_matrix_at(c, t),
                 live: self.live_fx.as_ref(),
             };
             fx_stack::build(
@@ -2375,6 +2424,7 @@ impl Editor {
             Drag::Gizmo(_) => self.update_gizmo_drag(e.position, cx),
             Drag::Crop(_) => self.update_crop_drag(e.position, cx),
             Drag::Layer(_) => self.update_layer_drag(cx),
+            Drag::Beat(_) => self.update_beat_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Nudge { origin, apply } => {
                 let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
@@ -2448,6 +2498,7 @@ impl Editor {
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
             Some(Drag::Gizmo(d)) => self.commit_gizmo_drag(*d, cx),
             Some(Drag::Layer(d)) => self.commit_layer_drag(*d, cx),
+            Some(Drag::Beat(d)) => self.commit_beat_drag(*d, cx),
             _ => {}
         }
         cx.notify();
@@ -2518,6 +2569,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::save_project))
             .on_action(cx.listener(Self::save_project_as))
+            .on_action(cx.listener(|ed, _: &OpenSettings, _, cx| ed.open_settings(false, cx)))
+            .on_action(cx.listener(|ed, _: &CheckForUpdates, _, cx| ed.open_settings(true, cx)))
             .on_drop(cx.listener(|ed, paths: &ExternalPaths, _, cx| {
                 let paths = paths
                     .paths()
@@ -2669,8 +2722,14 @@ impl Editor {
         if let Some(dialog) = self.render_crop_dialog(viewport, cx) {
             out.push(dialog);
         }
+        if self.settings_open {
+            out.push(self.render_settings(viewport, cx));
+        }
         if let Some(confirm) = &self.confirm {
             out.push(crate::ui::dialogs::confirm_dialog(confirm, cx).into_any_element());
+        }
+        if self.restart_prompt_open(cx) {
+            out.push(self.render_restart_prompt(cx));
         }
         if let Some(msg) = &self.toast {
             out.push(

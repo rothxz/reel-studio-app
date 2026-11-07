@@ -229,7 +229,13 @@ fn clamp_property(id: &str, v: f64) -> f64 {
         "transform.opacity" => (0., 1.),
         "mask.centerX" | "mask.centerY" | "mask.feather" => (0., 1.),
         "mask.width" | "mask.height" => (0.05, 1.),
-        _ => return v,
+        _ => match id
+            .strip_prefix(crate::adjust::PROPERTY_PREFIX)
+            .and_then(crate::adjust::control)
+        {
+            Some(c) => (c.min, c.max),
+            None => return v,
+        },
     };
     v.clamp(lo, hi)
 }
@@ -364,8 +370,8 @@ impl Clip {
         true
     }
 
-    /// A property's own (un-keyed) value: `transform.<field>` or
-    /// `mask.<field>` (None without a mask).
+    /// A property's own (un-keyed) value: `transform.<field>`,
+    /// `mask.<field>` (None without a mask) or `adjust.<slider>`.
     pub fn static_property(&self, id: &str) -> Option<f64> {
         if let Some(f) = id.strip_prefix("transform.") {
             let t = self.transform();
@@ -381,6 +387,9 @@ impl Clip {
         if let Some(f) = id.strip_prefix("mask.") {
             return self.mask()?.get(f);
         }
+        if let Some(key) = id.strip_prefix(crate::adjust::PROPERTY_PREFIX) {
+            return crate::adjust::control(key).map(|_| self.adjust_value(key));
+        }
         None
     }
 
@@ -392,6 +401,8 @@ impl Clip {
         {
             m.set(f, v);
             self.set_mask(Some(&m));
+        } else if let Some(key) = id.strip_prefix(crate::adjust::PROPERTY_PREFIX) {
+            self.set_adjust_value(key, v);
         }
     }
 
