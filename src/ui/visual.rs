@@ -16,6 +16,7 @@ use crate::editor::{Editor, NudgeFn, SliderFn};
 use crate::effects::stack::{MaskPlan, Placement};
 use crate::model::{Clip, Micros};
 use crate::theme;
+use crate::ui::color_row::{BACKGROUND_COLORS, SWATCH_COLORS};
 use crate::ui::icons::Icon;
 use crate::ui::timeline_edit::keyframe_eps;
 use crate::ui::widgets::{
@@ -46,18 +47,6 @@ const TRANSFORM_PROPS: [&str; 5] = [
 const MIN_ZOOM: f64 = 10.;
 const MAX_ZOOM: f64 = 10_000.;
 const SLIDER_MAX_ZOOM: f64 = 400.;
-
-/// The Background colours (none first is its own tile).
-pub(crate) const SWATCHES: [&str; 18] = [
-    "#000000", "#ffffff", "#3a3a3c", "#8e8e93", "#d1d1d6", "#ff3b30", "#ff9500", "#ffcc00",
-    "#34c759", "#00c7be", "#30b0c7", "#007aff", "#5856d6", "#af52de", "#ff2d55", "#a2845e",
-    "#f4e1c1", "#1c3d5a",
-];
-
-/// The Stroke colours of Remove BG.
-const STROKE_SWATCHES: [&str; 8] = [
-    "#ffffff", "#000000", "#ff3b30", "#ffcc00", "#34c759", "#007aff", "#af52de", "#ff2d55",
-];
 
 /// Background's pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,7 +301,8 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let id = clip_id.to_string();
-        self.edit(label, false, None, move |p| p.update_clip(&id, f), cx);
+        let coalesce = self.coalesce_edits.clone();
+        self.edit(label, false, coalesce, move |p| p.update_clip(&id, f), cx);
     }
 
     /// Animatable numbers, at the playhead: keyed on a clip with keyframes.
@@ -853,72 +843,6 @@ impl Editor {
             .into_any_element()
     }
 
-    /// A row of colour dots (`none` first when given); the chosen one ringed.
-    pub(crate) fn swatch_row(
-        &self,
-        key: &'static str,
-        colors: &[&'static str],
-        chosen: Option<&str>,
-        none: bool,
-        pick: impl Fn(&mut Editor, Option<&'static str>, &mut Context<Editor>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let pick = Rc::new(pick);
-        let dot = |id: ElementId, on: bool| {
-            div()
-                .id(id)
-                .flex_none()
-                .size(px(24.))
-                .rounded_full()
-                .p(px(2.))
-                .border_1()
-                .border_color(if on {
-                    theme::text().into()
-                } else {
-                    gpui::transparent_black()
-                })
-                .cursor_pointer()
-        };
-        let mut items: Vec<AnyElement> = Vec::new();
-        if none {
-            let p = pick.clone();
-            items.push(
-                dot((key, usize::MAX).into(), chosen.is_none())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .tooltip(tooltip("None", None))
-                    .child(Icon::BanOutline.el(18., theme::text_secondary()))
-                    .on_click(cx.listener(move |ed, _, _, cx| p(ed, None, cx)))
-                    .into_any_element(),
-            );
-        }
-        for (i, &c) in colors.iter().enumerate() {
-            let p = pick.clone();
-            let on = chosen.is_some_and(|x| x.eq_ignore_ascii_case(c));
-            items.push(
-                dot((key, i).into(), on)
-                    .child(
-                        div()
-                            .size_full()
-                            .rounded_full()
-                            .bg(hex(c))
-                            .border_1()
-                            .border_color(theme::chip_border()),
-                    )
-                    .on_click(cx.listener(move |ed, _, _, cx| p(ed, Some(c), cx)))
-                    .into_any_element(),
-            );
-        }
-        div()
-            .flex()
-            .flex_wrap()
-            .gap(px(6.))
-            .py(px(6.))
-            .children(items)
-            .into_any_element()
-    }
-
     // ---- panels ---------------------------------------------------------------------------
 
     /// Basic: Transform (Zoom, Position, Rotate) with reset and ‹ ◇ ›, and
@@ -1311,9 +1235,9 @@ impl Editor {
                 out.push(
                     panel_row("Color")
                         .h_auto()
-                        .child(div().flex_1().min_w_0().child(self.swatch_row(
+                        .child(div().flex_1().min_w_0().child(self.color_row(
                             "stroke-color",
-                            &STROKE_SWATCHES,
+                            &SWATCH_COLORS,
                             Some(&s.color),
                             false,
                             move |ed, c, cx| {
@@ -1321,7 +1245,7 @@ impl Editor {
                                     ed.set_stroke(
                                         &c1,
                                         Some(CutoutStroke {
-                                            color: c.into(),
+                                            color: c,
                                             ..s1.clone()
                                         }),
                                         cx,
@@ -1655,13 +1579,13 @@ impl Editor {
                     _ => None,
                 };
                 let id = clip.id.clone();
-                out.push(self.swatch_row(
+                out.push(self.color_row(
                     "bg-color",
-                    &SWATCHES,
+                    &BACKGROUND_COLORS,
                     chosen,
                     true,
                     move |ed, c, cx| {
-                        ed.set_background(&id, c.map(|c| Background::Color { color: c.into() }), cx)
+                        ed.set_background(&id, c.map(|c| Background::Color { color: c }), cx)
                     },
                     cx,
                 ));

@@ -5,6 +5,7 @@ pub mod adjust_panel;
 pub mod audio_panel;
 pub mod browser;
 pub mod clip_tools;
+pub mod color_row;
 pub mod crop;
 pub mod dialogs;
 pub mod fx;

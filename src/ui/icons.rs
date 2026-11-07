@@ -70,6 +70,7 @@ icons! {
     Layers => (ION, 0xf3b0),
     Text => (ION, 0xf5cc),
     Palette => (ION, 0xf27e),
+    Eyedrop => (ION, 0xf2ed),
     MusicalNotes => (ION, 0xf46a),
     MusicalNote => (ION, 0xf467),
     Timer => (ION, 0xf5e1),

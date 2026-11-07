@@ -151,6 +151,8 @@ pub enum Drag {
     Layer(Box<crate::ui::layers::LayerDrag>),
     /// A beat held on the Speed › Curve graph (`ui/speed_curve.rs`).
     Beat(Box<crate::ui::speed_curve::BeatDrag>),
+    /// A colour row's custom-colour field (`ui/color_row.rs`).
+    Spectrum(crate::ui::color_row::ColorFn),
 }
 
 /// A picture the player shows: its clip, and the frame server decoding it.
@@ -294,6 +296,14 @@ pub struct Editor {
     last_slider_fraction: Option<f32>,
     /// How far (px) the scrubbed number field has moved.
     nudge_dx: f32,
+    /// A colour row's eyedropper waiting for a click on the player, the
+    /// open custom-colour field, and each row's swatch scroll.
+    pub(crate) color_pick: Option<crate::ui::color_row::ColorPick>,
+    pub(crate) spectrum: Option<crate::ui::color_row::Spectrum>,
+    pub(crate) color_scrolls: RefCell<HashMap<&'static str, gpui::ScrollHandle>>,
+    /// Set while a held control edits continuously: its edits join one
+    /// undo step.
+    pub(crate) coalesce_edits: Option<String>,
     /// Background's Color / Image / Blur page, per clip (else the page of
     /// the clip's own background).
     pub(crate) background_page: Option<(String, crate::ui::visual::BgPage)>,
@@ -492,6 +502,10 @@ impl Editor {
             drag: None,
             live_value: None,
             nudge_dx: 0.,
+            color_pick: None,
+            spectrum: None,
+            color_scrolls: RefCell::default(),
+            coalesce_edits: None,
             background_page: None,
             last_slider_fraction: None,
             toast: None,
@@ -2426,6 +2440,7 @@ impl Editor {
             Drag::Layer(_) => self.update_layer_drag(cx),
             Drag::Beat(_) => self.update_beat_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
+            Drag::Spectrum(_) => self.spectrum_to(e.position, cx),
             Drag::Nudge { origin, apply } => {
                 let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
                 self.nudge_dx = dx;

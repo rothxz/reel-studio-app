@@ -119,12 +119,21 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .overflow_hidden()
-                    .cursor(self.gizmo_cursor())
+                    .cursor(if self.color_pick.is_some() {
+                        gpui::CursorStyle::Crosshair
+                    } else {
+                        self.gizmo_cursor()
+                    })
                     // Layers are picked, moved, scaled and turned here
                     // (`ui/gizmo.rs`).
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|ed, e: &MouseDownEvent, _, cx| ed.gizmo_mouse_down(e, cx)),
+                        cx.listener(|ed, e: &MouseDownEvent, _, cx| {
+                            // The eyedropper takes the press when it waits.
+                            if !ed.eyedrop_at(e.position, cx) {
+                                ed.gizmo_mouse_down(e, cx)
+                            }
+                        }),
                     )
                     .on_mouse_move(cx.listener(|ed, e: &MouseMoveEvent, _, cx| {
                         if ed.drag.is_none() {
