@@ -310,7 +310,7 @@ impl Clip {
             .unwrap_or_default()
     }
 
-    fn set_effects(&mut self, effects: &[EffectInstance]) {
+    pub(crate) fn set_effects(&mut self, effects: &[EffectInstance]) {
         self.extra.insert(
             "effects".into(),
             serde_json::to_value(effects).unwrap_or_else(|_| Value::Array(vec![])),
@@ -709,14 +709,9 @@ impl Project {
     }
 
     /// Changes a clip's speed, keeping its source segment (so its timeline
-    /// length scales).
-    pub fn set_speed(&mut self, clip_id: &str, speed: f64) {
-        if let Some(clip) = self.clip_mut(clip_id) {
-            let source_len = (clip.timeline_duration as f64 * clip.speed) as Micros;
-            clip.speed = speed;
-            clip.timeline_duration = (source_len as f64 / speed).round() as Micros;
-        }
-        self.recompute_duration();
+    /// length scales). A constant speed replaces any speed curve.
+    pub fn set_speed(&mut self, clip_id: &str, speed: f64) -> bool {
+        self.retime_clip(clip_id, speed, None)
     }
 
     /// Delete left / right: trims away the part of the clip before / after

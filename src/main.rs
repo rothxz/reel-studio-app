@@ -1,3 +1,4 @@
+mod adjust;
 mod assets;
 mod audio;
 mod catalog;
@@ -15,10 +16,12 @@ mod prefs;
 mod projects;
 mod selection;
 mod shortcuts;
+mod speed_curve;
 mod stickers;
 mod text_render;
 mod theme;
 mod ui;
+mod updater;
 mod visual;
 
 use gpui::{
@@ -56,6 +59,7 @@ fn main() {
                 KeyBinding::new("secondary-s", SaveProject, None),
                 KeyBinding::new("secondary-shift-s", SaveProjectAs, None),
                 KeyBinding::new("secondary-q", Quit, None),
+                KeyBinding::new("secondary-,", OpenSettings, None),
             ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -63,7 +67,12 @@ fn main() {
             cx.set_menus(vec![
                 Menu {
                     name: "Reel Studio".into(),
-                    items: vec![MenuItem::action("Quit Reel Studio", Quit)],
+                    items: vec![
+                        MenuItem::action("Settings…", OpenSettings),
+                        MenuItem::action("Check for Updates…", CheckForUpdates),
+                        MenuItem::separator(),
+                        MenuItem::action("Quit Reel Studio", Quit),
+                    ],
                 },
                 Menu {
                     name: "File".into(),

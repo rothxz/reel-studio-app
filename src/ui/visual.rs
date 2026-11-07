@@ -646,7 +646,7 @@ impl Editor {
     /// "Label | slider | read-out": live while dragged, `commit` once on
     /// release (in the read-out's units).
     #[allow(clippy::too_many_arguments)]
-    fn fx_slider(
+    pub(crate) fn fx_slider(
         &self,
         key: &'static str,
         label: &str,

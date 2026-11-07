@@ -86,6 +86,7 @@ mod imp {
             cap: usize,
         ) -> usize;
         fn reel_filter_color_matrix(name: *const c_char, intensity: f64, out: *mut f64) -> i32;
+        fn reel_adjust_color_matrix(values: *const f64, out: *mut f64) -> i32;
         fn reel_engine_clip_property(
             e: *mut RawEngine,
             clip_id: *const c_char,
@@ -101,6 +102,14 @@ mod imp {
         let name = CString::new(name).ok()?;
         let mut out = [0f64; 20];
         let on = unsafe { reel_filter_color_matrix(name.as_ptr(), intensity, out.as_mut_ptr()) };
+        (on != 0).then(|| out.map(|v| v as f32))
+    }
+
+    /// The Adjust sliders' colour matrix (values in `adjust::CONTROLS`
+    /// order, as stored), built by the engine; None when they're all 0.
+    pub fn adjust_color_matrix(values: &[f64; 7]) -> Option<[f32; 20]> {
+        let mut out = [0f64; 20];
+        let on = unsafe { reel_adjust_color_matrix(values.as_ptr(), out.as_mut_ptr()) };
         (on != 0).then(|| out.map(|v| v as f32))
     }
 
@@ -223,6 +232,11 @@ mod imp {
         None
     }
 
+    /// Likewise the Adjust matrix: the stand-in shows the clip unadjusted.
+    pub fn adjust_color_matrix(_values: &[f64; 7]) -> Option<[f32; 20]> {
+        None
+    }
+
     impl Engine {
         pub fn new() -> Self {
             Engine {
@@ -306,7 +320,7 @@ mod imp {
     }
 }
 
-pub use imp::{Engine, filter_color_matrix};
+pub use imp::{Engine, adjust_color_matrix, filter_color_matrix};
 
 #[cfg(test)]
 mod tests {
@@ -320,6 +334,10 @@ mod tests {
         assert!(filter_color_matrix("VHS", 100.).is_some());
         assert!(filter_color_matrix("VHS", 0.).is_none());
         assert!(filter_color_matrix("No Such Look", 100.).is_none());
+        assert!(adjust_color_matrix(&[0.; 7]).is_none());
+        // Brightness +50 lifts every channel by half.
+        let m = adjust_color_matrix(&[50., 0., 0., 0., 0., 0., 0.]).unwrap();
+        assert_eq!((m[0], m[4], m[9], m[14]), (1., 0.5, 0.5, 0.5));
     }
 
     /// Runs against whichever backend is built: `cargo test --features
@@ -358,6 +376,42 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(120));
         let t = e.tick();
         assert!(t >= 100_000 && t < 400_000, "clock advanced to {t}");
+    }
+
+    /// A ramp re-times the clip to its average speed, and the C++ engine
+    /// plays its source through the curve: Flash In runs fast first, so
+    /// halfway through its length more than half the source has played.
+    #[test]
+    fn engine_plays_a_speed_curve() {
+        let mut p = Project::empty();
+        let item = MediaItem {
+            path: "/tmp/a.mp4".into(),
+            name: "a.mp4".into(),
+            duration: 4 * SECOND,
+            width: 1920,
+            height: 1080,
+            has_video: true,
+            still: false,
+        };
+        let a = p.insert_media(&item, None);
+        let ramp = crate::speed_curve::preset_curve("flashIn").unwrap();
+        assert!(p.retime_clip(&a, 1., Some(ramp)));
+        let clip = p.find_clip(&a).unwrap().1.clone();
+        assert!(clip.speed > 1. && clip.speed_curve().is_some());
+        assert!(clip.timeline_duration < 4 * SECOND);
+        let mut e = Engine::new();
+        e.load(&p).expect("engine parses the ramp");
+        let half = e.active_layers(clip.timeline_duration / 2);
+        assert_eq!(half.len(), 1);
+        if cfg!(feature = "cpp-engine") {
+            assert!(half[0].source_time > 2 * SECOND, "{}", half[0].source_time);
+        }
+        // A constant speed drops the ramp.
+        assert!(p.set_speed(&a, 1.));
+        assert!(p.find_clip(&a).unwrap().1.speed_curve().is_none());
+        // Back to its source length (to the µs the rounding keeps).
+        let back = p.find_clip(&a).unwrap().1.timeline_duration;
+        assert!((back - 4 * SECOND).abs() <= 1, "{back}");
     }
 
     /// Both backends answer a keyframed property at a clip-local time (the

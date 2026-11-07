@@ -58,6 +58,7 @@ icons! {
     ZoomOut => (ION, 0xf522),
     ZoomIn => (ION, 0xf105),
     Add => (ION, 0xf103),
+    Remove => (ION, 0xf520),
     Cut => (ION, 0xf29c),
     Options => (ION, 0xf48b),
     VolumeHigh => (ION, 0xf614),
@@ -78,6 +79,9 @@ icons! {
     FolderOpen => (ION, 0xf327),
     CloudUpload => (ION, 0xf260),
     Search => (ION, 0xf55f),
+    CloudDownload => (ION, 0xf258),
+    RefreshCircle => (ION, 0xf516),
+    InformationCircle => (ION, 0xf399),
     Ellipsis => (ION, 0xf2ce),
     Pencil => (ION, 0xf49c),
     Checkbox => (ION, 0xf21b),
@@ -292,6 +296,7 @@ mod tests {
             Icon::Undo,
             Icon::Magnet,
             Icon::Filmstrip,
+            Icon::Remove,
         ] {
             let (font, code) = i.glyph();
             let svg = glyph_svg(font, code).unwrap_or_else(|| panic!("{i:?}"));

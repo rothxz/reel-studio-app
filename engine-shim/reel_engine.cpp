@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 
+#include "videoengine/EffectGraph.h"
+#include "videoengine/Effects.h"
 #include "videoengine/Engine.h"
 #include "videoengine/FilterPresets.h"
 #include "videoengine/Keyframes.h"
@@ -126,6 +128,25 @@ int32_t reel_filter_color_matrix(const char* name, double intensity, double* out
   auto m = GetFilterColorMatrix(name ? name : "", intensity);
   for (size_t i = 0; i < m.size(); ++i) out[i] = m[i];
   return m == kIdentityColorMatrix4x5 ? 0 : 1;
+}
+
+// The Adjust sliders' 4x5 colour matrix (same layout as above). `values`:
+// brightness, contrast, saturation, hue, exposure, temperature, tint, as
+// stored (-100..100, hue -180..180 degrees). 0 when they're all 0.
+int32_t reel_adjust_color_matrix(const double* values, double* out) {
+  ColorAdjustment a;
+  a.brightness = values[0] / 100.0;
+  a.contrast = values[1] / 100.0;
+  a.saturation = values[2] / 100.0;
+  a.hueDegrees = values[3];
+  a.exposure = values[4] / 100.0;
+  a.temperature = values[5] / 100.0;
+  a.tint = values[6] / 100.0;
+  const auto m = ColorMatrix4x4To4x5(BuildColorMatrix(a));
+  for (size_t i = 0; i < m.size(); ++i) out[i] = m[i];
+  for (int i = 0; i < 7; ++i)
+    if (values[i] != 0.0) return 1;
+  return 0;
 }
 
 }  // extern "C"

@@ -4,8 +4,9 @@
 //!
 //! Per picture (the order export shades a clip in): its video effect if it
 //! distorts, its filter (a Classic look's colour matrix, or a packaged
-//! filter's shader mixed by its intensity), then its video effect if it's
-//! laid over the picture. Then it's placed on the canvas: crop, mirror /
+//! filter's shader mixed by its intensity) with its Adjust sliders' matrix
+//! (inside a Classic look, after a packaged one), then its video effect if
+//! it's laid over the picture. Then it's placed on the canvas: crop, mirror /
 //! flip, transform, shape mask, opacity and Splice blend over what's
 //! below. Under everything, the canvas colour, or the main clip's
 //! Background (a colour, a photo, or its own picture blurred). Then every
@@ -187,6 +188,9 @@ pub struct Sources<'a> {
     pub effect_key: &'a dyn Fn(&str) -> Option<String>,
     /// A Classic filter's matrix at an intensity (None: identity / unknown).
     pub filter_matrix: &'a dyn Fn(&str, f64) -> Option<[f32; 20]>,
+    /// The clip's Adjust sliders as a matrix at the preview time (None:
+    /// untouched).
+    pub adjust_matrix: &'a dyn Fn(&Clip) -> Option<[f32; 20]>,
     pub live: Option<&'a LiveParam>,
 }
 
@@ -311,7 +315,17 @@ pub fn build(
         let effect = effect_pass(clip, t, src, needs);
         let (before, after): (Vec<Pass>, Vec<Pass>) = effect.into_iter().partition(is_distortion);
         passes.extend(before);
-        passes.extend(filter_pass(clip, src, needs));
+        // Like export: a packaged filter's shader, then the colour matrix
+        // (Adjust inside, a Classic filter's look outside).
+        let filter = filter_pass(clip, src, needs);
+        let adjust = (src.adjust_matrix)(clip).map(Pass::Matrix);
+        if matches!(filter, Some(Pass::Matrix(_))) {
+            passes.extend(adjust);
+            passes.extend(filter);
+        } else {
+            passes.extend(filter);
+            passes.extend(adjust);
+        }
         passes.extend(after);
         stack.layers.push(LayerPlan {
             passes,
@@ -438,6 +452,7 @@ mod tests {
             packages: &packages,
             effect_key: &key,
             filter_matrix: &none,
+            adjust_matrix: &|_| None,
             live: None,
         };
         let clip = p.find_clip(&video).unwrap().1.clone();
@@ -468,6 +483,7 @@ mod tests {
             packages: &packages,
             effect_key: &no_key,
             filter_matrix: &none,
+            adjust_matrix: &|_| None,
             live: None,
         };
         let mut needs = Needs::default();
@@ -502,6 +518,7 @@ mod tests {
             packages: &packages,
             effect_key: &key,
             filter_matrix: &none,
+            adjust_matrix: &|_| None,
             live: None,
         };
         let mut clip = p.find_clip(&video).unwrap().1.clone();
