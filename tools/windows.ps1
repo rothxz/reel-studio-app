@@ -40,17 +40,25 @@ function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
 # curl.exe (part of Windows): Windows PowerShell's Invoke-WebRequest can
 # stall on large downloads. A dropped connection resumes where it stopped
-# (-C -), trying each mirror in turn.
-function Get-File([string[]] $urls, [string] $out) {
+# (-C -) until the file has the size the server announced (curl can end a
+# resumed transfer early without an error).
+function Get-File([string] $url, [string] $out) {
     if (Test-Path $out) { Remove-Item $out }
-    for ($attempt = 1; $attempt -le 20; $attempt++) {
-        $url = $urls[($attempt - 1) % $urls.Count]
+    $size = 0
+    $head = & curl.exe -fsSIL --connect-timeout 30 $url
+    foreach ($line in $head) {
+        if ($line -match '^content-length:\s*(\d+)') { $size = [int64]$Matches[1] }
+    }
+    for ($attempt = 1; $attempt -le 30; $attempt++) {
         & curl.exe -fsSL -C - --connect-timeout 30 --speed-limit 4096 --speed-time 60 -o $out $url
-        if ($LASTEXITCODE -eq 0) { return }
-        Write-Host "  download interrupted (curl $LASTEXITCODE), resuming ($attempt/20)"
+        $code = $LASTEXITCODE
+        $have = if (Test-Path $out) { (Get-Item $out).Length } else { 0 }
+        if ($code -eq 0 -and ($size -eq 0 -or $have -eq $size)) { return }
+        if ($size -gt 0 -and $have -gt $size) { Remove-Item $out; $have = 0 }
+        Write-Host ("  download interrupted at {0:N1} / {1:N1} MB (curl {2}), resuming ({3}/30)" -f ($have / 1MB), ($size / 1MB), $code, $attempt)
         Start-Sleep -Seconds 2
     }
-    throw "download failed: $($urls -join ', ')"
+    throw "download failed: $url"
 }
 
 # ---- MSVC -------------------------------------------------------------------
@@ -121,8 +129,7 @@ function Install-Msys {
         Step "MSYS2 (portable, into $msys)"
         New-Item -ItemType Directory -Force $tools | Out-Null
         $sfx = Join-Path $tools "msys2-base.sfx.exe"
-        Get-File @("https://repo.msys2.org/distrib/msys2-x86_64-latest.sfx.exe",
-            "https://github.com/msys2/msys2-installer/releases/download/nightly-x86_64/msys2-base-x86_64-latest.sfx.exe") $sfx
+        Get-File "https://repo.msys2.org/distrib/msys2-x86_64-latest.sfx.exe" $sfx
         & $sfx -y "-o$tools" | Out-Null
         Remove-Item $sfx
         if (-not (Test-Path $bash)) { throw "MSYS2 didn't unpack into $msys" }
