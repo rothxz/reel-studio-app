@@ -5,6 +5,7 @@ mod decoder;
 mod editor;
 mod effects;
 mod engine;
+mod gizmo;
 mod history;
 mod library;
 mod model;

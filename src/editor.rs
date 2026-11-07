@@ -135,6 +135,8 @@ pub enum Drag {
     Marquee(Box<Marquee>),
     /// A keyframe diamond on the selected clip: a click seeks, a drag moves.
     Keyframe(Box<KeyframeDrag>),
+    /// A layer moved, or scaled and turned, on the player (`ui/gizmo.rs`).
+    Gizmo(Box<crate::ui::gizmo::GizmoDrag>),
 }
 
 /// A picture the player shows: its clip, and the frame server decoding it.
@@ -145,6 +147,9 @@ pub struct WantedLayer {
     pub kind: LayerKind,
     /// A text layer's picture: its pixels per canvas px.
     pub raster_px: f32,
+    /// A text layer's words and background, px of its picture (the
+    /// on-canvas selection box; the picture also holds glow and shadow).
+    pub content: Option<[f32; 2]>,
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -354,6 +359,13 @@ pub struct Editor {
     stickers_wanted: Vec<String>,
     /// A held text slider: (clip, field, value) shown before release.
     pub(crate) live_text: Option<(String, &'static str, serde_json::Value)>,
+    /// A layer being moved / scaled / turned on the player: its transform
+    /// so far (shown before the edit lands on release), and what it
+    /// snapped to (the guide lines).
+    pub(crate) live_xform: Option<(String, crate::gizmo::Xform)>,
+    pub(crate) gizmo_snap: crate::gizmo::Snapped,
+    /// What the pointer is over on the player (its cursor).
+    pub(crate) gizmo_hover: Option<crate::ui::gizmo::GizmoHover>,
     frame_seq: u64,
     /// Effect / filter shaders downloaded this session.
     pub(crate) packages: Packages,
@@ -495,6 +507,9 @@ impl Editor {
             backdrop_images: HashMap::new(),
             text_rasters: RasterCache::default(),
             stickers: HashMap::new(),
+            live_xform: None,
+            gizmo_snap: Default::default(),
+            gizmo_hover: None,
             stickers_wanted: vec![],
             live_text: None,
             frame_seq: 0,
@@ -1699,7 +1714,7 @@ impl Editor {
         for layer in layers {
             match layer.kind {
                 LayerKind::Text => {
-                    let Some((key, frame, raster_px)) =
+                    let Some((key, frame, raster_px, content)) =
                         self.text_layer(&layer.clip_id, layer.offset)
                     else {
                         continue; // nothing to write yet
@@ -1711,6 +1726,7 @@ impl Editor {
                         clip_id: layer.clip_id,
                         kind: LayerKind::Text,
                         raster_px,
+                        content: Some(content),
                     });
                 }
                 LayerKind::Sticker => {
@@ -1732,6 +1748,7 @@ impl Editor {
                         clip_id: layer.clip_id,
                         kind: LayerKind::Sticker,
                         raster_px: 1.,
+                        content: None,
                     });
                 }
                 _ => {
@@ -1758,6 +1775,7 @@ impl Editor {
                         clip_id: layer.clip_id,
                         kind: layer.kind,
                         raster_px: 1.,
+                        content: None,
                     });
                 }
             }
@@ -1800,7 +1818,7 @@ impl Editor {
         &mut self,
         clip_id: &str,
         offset: Micros,
-    ) -> Option<(String, Arc<DecodedFrame>, f32)> {
+    ) -> Option<(String, Arc<DecodedFrame>, f32, [f32; 2])> {
         let (_, clip) = self.project.find_clip(clip_id)?;
         let mut style = TextStyle::from_clip(clip);
         if let Some((id, field, value)) = &self.live_text
@@ -1822,8 +1840,51 @@ impl Editor {
         let fx_scale = self.fx_canvas_px().0 as f32 / canvas.0 as f32;
         let raster_px = fx_scale * raster_zoom;
         let px_per_unit = text_render::unit_px(canvas.0, canvas.1) * raster_px;
-        let frame = self.text_rasters.get_or_draw(&style, canvas, px_per_unit)?;
-        Some((format!("text:{clip_id}"), frame, raster_px))
+        let (frame, content) = self.text_rasters.get_or_draw(&style, canvas, px_per_unit)?;
+        Some((format!("text:{clip_id}"), frame, raster_px, content))
+    }
+
+    /// A text / sticker layer's own size at zoom 1 (canvas widths,
+    /// heights) from its picture `f`; None for videos and photos, which
+    /// are contain-fitted.
+    pub(crate) fn layer_natural(
+        &self,
+        w: &WantedLayer,
+        c: &Clip,
+        f: &DecodedFrame,
+    ) -> Option<[f32; 2]> {
+        let (cw, ch) = (
+            self.project.canvas.width.max(1) as f32,
+            self.project.canvas.height.max(1) as f32,
+        );
+        match w.kind {
+            // Its picture's own size (drawn `raster_px` per canvas px).
+            LayerKind::Text => Some([
+                f.width as f32 / w.raster_px / cw,
+                f.height as f32 / w.raster_px / ch,
+            ]),
+            // Fitted in 40 % of the canvas's short side.
+            LayerKind::Sticker => {
+                let sw = c.extra.get("sourceWidth").and_then(|v| v.as_f64());
+                let sh = c.extra.get("sourceHeight").and_then(|v| v.as_f64());
+                let (sw, sh) = match (sw, sh) {
+                    (Some(a), Some(b)) if a > 0. && b > 0. => (a as f32, b as f32),
+                    _ => (f.width as f32, f.height as f32),
+                };
+                let side = cw.min(ch) * STICKER_FRACTION;
+                let fit = (side / sw).min(side / sh);
+                Some([sw * fit / cw, sh * fit / ch])
+            }
+            _ => None,
+        }
+    }
+
+    /// The pictures the player shows now (back to front) with their last
+    /// frame, for the on-canvas gizmo.
+    pub(crate) fn shown_layers(&self) -> impl Iterator<Item = (&WantedLayer, &Arc<DecodedFrame>)> {
+        self.wanted
+            .iter()
+            .filter_map(|w| Some((w, self.layer_frames.get(&w.key)?)))
     }
 
     /// Starts loading the stickers the preview asked for.
@@ -1948,10 +2009,6 @@ impl Editor {
         let t = self.preview_time();
         let mut needs = Needs::default();
         let stack = {
-            let (cw, ch) = (
-                self.project.canvas.width.max(1) as f32,
-                self.project.canvas.height.max(1) as f32,
-            );
             let clips: Vec<(&Clip, fx_stack::Placement)> = self
                 .wanted
                 .iter()
@@ -1959,28 +2016,7 @@ impl Editor {
                 .filter_map(|(w, f)| {
                     let (_, c) = self.project.find_clip(&w.clip_id)?;
                     let mut place = self.layer_placement(c, t);
-                    match w.kind {
-                        // Its picture's own size (drawn `raster_px` per canvas px).
-                        LayerKind::Text => {
-                            place.natural = Some([
-                                f.width as f32 / w.raster_px / cw,
-                                f.height as f32 / w.raster_px / ch,
-                            ]);
-                        }
-                        // Fitted in 40 % of the canvas's short side.
-                        LayerKind::Sticker => {
-                            let sw = c.extra.get("sourceWidth").and_then(|v| v.as_f64());
-                            let sh = c.extra.get("sourceHeight").and_then(|v| v.as_f64());
-                            let (sw, sh) = match (sw, sh) {
-                                (Some(a), Some(b)) if a > 0. && b > 0. => (a as f32, b as f32),
-                                _ => (f.width as f32, f.height as f32),
-                            };
-                            let side = cw.min(ch) * STICKER_FRACTION;
-                            let fit = (side / sw).min(side / sh);
-                            place.natural = Some([sw * fit / cw, sh * fit / ch]);
-                        }
-                        _ => {}
-                    }
+                    place.natural = self.layer_natural(w, c, f);
                     Some((c, place))
                 })
                 .collect();
@@ -2320,6 +2356,7 @@ impl Editor {
             Drag::Clip(_) => self.update_clip_drag(e.position, cx),
             Drag::Marquee(_) => self.update_marquee(e.position, cx),
             Drag::Keyframe(_) => self.update_keyframe_drag(e.position, cx),
+            Drag::Gizmo(_) => self.update_gizmo_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Nudge { origin, apply } => {
                 let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
@@ -2391,6 +2428,7 @@ impl Editor {
             }
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
+            Some(Drag::Gizmo(d)) => self.commit_gizmo_drag(*d, cx),
             _ => {}
         }
         cx.notify();

@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
-use gpui::{AssetSource, Div, Hsla, ParentElement, SharedString, Styled, div, px, svg};
+use gpui::{
+    AssetSource, Div, Hsla, ParentElement, SharedString, Styled, Svg, Transformation, div, px, svg,
+};
 
 const ION: &str = "ion";
 const MDI: &str = "mdi";
@@ -120,6 +122,9 @@ icons! {
     Curve => (MDI, 0xf0fa7),
     Voice => (MDI, 0xf05cb),
     Rotate => (MDI, 0xf0885),
+    MdiClose => (MDI, 0xf0156),
+    MdiPencil => (MDI, 0xf03eb),
+    MdiRotateRight => (MDI, 0xf0467),
     Waveform => (MDI, 0xf147d),
     Title => (MDI, 0xf05f4),
     Combine => (MDI, 0xf0558),
@@ -170,6 +175,17 @@ impl Icon {
                     .size(px(size))
                     .text_color(color.into()),
             )
+    }
+
+    /// The icon `size` px square, turned clockwise by `radians`.
+    pub fn turned(self, size: f32, color: impl Into<Hsla>, radians: f32) -> Svg {
+        let (font, code) = self.glyph();
+        svg()
+            .path(SharedString::from(format!("icon/{font}/{code:x}.svg")))
+            .size(px(size))
+            .flex_none()
+            .text_color(color.into())
+            .with_transformation(Transformation::rotate(gpui::radians(radians)))
     }
 }
 

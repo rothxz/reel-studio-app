@@ -198,8 +198,23 @@ isn't listed.
 - [x] Ratio badge (16:9, 0.73:1 …) → ratio menu (Original, 9:16, 1:1,
   16:9, 4:3, 3:4, 5.8", 2:1, 2.35:1, 1.85:1; 1080 px short side), undoable
 - [x] Fullscreen preview (⌘⇧F, Esc leaves): the player alone
-- [ ] On-canvas gizmo: select, move, scale, rotate layers; preview axis
-  guides (S)
+- [~] On-canvas gizmo (`gizmo.rs` math, `ui/gizmo.rs`): every text,
+  sticker and picture-in-picture layer on screen is picked topmost first
+  (12 px slop) and dragged to move; the main video only once selected
+  (pan, no corner handle). The selected layer gets a white box (dark
+  underlay; 2 px out on text / stickers, text boxed on its words, not its
+  glow) with ✕ delete (text, stickers), ✎ edit the words (text: Text ›
+  Basic with the field focused; so does a second click on selected text)
+  and scale + turn about the centre (bottom right, 0.1–100×), the handles
+  turning with it. Moves snap within 10 px to the canvas centre lines and
+  the other layers' centres, turns to every 45° within 4°, with a guide
+  line / level cross while on one. Shown live, one "Change Transform" undo
+  step on release (rounded as the old editor; keyed at the playhead on a
+  keyframed clip); a locked clip or lane selects but doesn't move; a click
+  on empty canvas clears the selection, ⇧ / ⌘ click toggles; a move pauses
+  playback. Cursor: open / closed hand. *Not yet: the Mask gizmo (Mask
+  tab), drawings, trackpad pinch / twist, the inspector's numbers
+  following a drag before release.*
 - [ ] Hardware decode (VideoToolbox / D3D11VA / VA-API) + zero-copy frames
 
 ## Inspector (right)

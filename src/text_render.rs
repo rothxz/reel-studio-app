@@ -305,6 +305,9 @@ pub struct Raster {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+    /// The words and their background (not the glow or shadow around
+    /// them), px, centred like the picture: the on-canvas selection box.
+    pub content: [f32; 2],
 }
 
 /// One laid-out line (pixels, block space: y down from the block's top).
@@ -632,6 +635,21 @@ pub fn rasterize(style: &TextStyle, canvas: (u32, u32), px_per_unit: f32) -> Opt
         half_w = half_w.max(cx - l + margin).max(r - cx + margin);
         half_h = half_h.max(cy - t + margin).max(b - cy + margin);
     };
+    // The content box: the same, without what glows or shadows past it.
+    let (mut content_w, mut content_h) = (block_w / 2., block_h / 2.);
+    let mut grow_content = |l: f32, t: f32, r: f32, b: f32, margin: f32| {
+        content_w = content_w.max(cx - l + margin).max(r - cx + margin);
+        content_h = content_h.max(cy - t + margin).max(b - cy + margin);
+    };
+    if let Some(p) = &text_path {
+        let b = p.bounds();
+        grow_content(b.left(), b.top(), b.right(), b.bottom(), stroke_w / 2.);
+    }
+    if let Some((_, rects)) = &bg {
+        for r in rects {
+            grow_content(r.left(), r.top(), r.right(), r.bottom(), 0.);
+        }
+    }
     let mut effect_margin = stroke_w;
     if let Some((_, _, sigma)) = &glow {
         effect_margin = effect_margin.max(sigma * 3.);
@@ -786,6 +804,10 @@ pub fn rasterize(style: &TextStyle, canvas: (u32, u32), px_per_unit: f32) -> Opt
         width,
         height,
         bgra,
+        content: [
+            (content_w * 2.).min(width as f32),
+            (content_h * 2.).min(height as f32),
+        ],
     })
 }
 
@@ -793,7 +815,7 @@ pub fn rasterize(style: &TextStyle, canvas: (u32, u32), px_per_unit: f32) -> Opt
 /// redraws one per step; a playing timeline reuses them).
 #[derive(Default)]
 pub struct RasterCache {
-    entries: HashMap<String, std::sync::Arc<crate::decoder::DecodedFrame>>,
+    entries: HashMap<String, (std::sync::Arc<crate::decoder::DecodedFrame>, [f32; 2])>,
     order: Vec<String>,
 }
 
@@ -805,7 +827,7 @@ impl RasterCache {
         style: &TextStyle,
         canvas: (u32, u32),
         px_per_unit: f32,
-    ) -> Option<std::sync::Arc<crate::decoder::DecodedFrame>> {
+    ) -> Option<(std::sync::Arc<crate::decoder::DecodedFrame>, [f32; 2])> {
         let key = format!("{}|{canvas:?}|{px_per_unit:.4}", style.key());
         if let Some(f) = self.entries.get(&key) {
             return Some(f.clone());
@@ -819,13 +841,13 @@ impl RasterCache {
             height: r.height,
             bgra: r.bgra,
         });
-        self.entries.insert(key.clone(), frame.clone());
+        self.entries.insert(key.clone(), (frame.clone(), r.content));
         self.order.push(key);
         while self.order.len() > Self::KEEP {
             let old = self.order.remove(0);
             self.entries.remove(&old);
         }
-        Some(frame)
+        Some((frame, r.content))
     }
 }
 

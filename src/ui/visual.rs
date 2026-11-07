@@ -192,7 +192,22 @@ impl Editor {
         let live = self
             .live_property()
             .filter(|_| self.selected.primary() == Some(clip.id.as_str()));
+        // A layer held on the player: its transform so far.
+        let held = self
+            .live_xform
+            .as_ref()
+            .filter(|(id, _)| *id == clip.id)
+            .map(|(_, x)| *x);
         let get = |id: &str, def: f64| -> f32 {
+            if let Some(x) = held {
+                match id {
+                    "transform.x" => return x.x,
+                    "transform.y" => return x.y,
+                    "transform.scale" => return x.scale,
+                    "transform.rotation" => return x.rotation,
+                    _ => {}
+                }
+            }
             match live {
                 Some((p, v)) if p == id => v as f32,
                 _ => self.property_at(clip, id, local).unwrap_or(def) as f32,
