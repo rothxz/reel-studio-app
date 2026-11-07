@@ -249,6 +249,18 @@ impl Clip {
     }
 
     /// Clip volume, 1 = as recorded.
+    /// Fade in / out lengths (`audioFade`), 0 when unset.
+    pub fn audio_fade(&self) -> (Micros, Micros) {
+        let f = self.extra.get("audioFade");
+        let get = |k: &str| {
+            f.and_then(|f| f.get(k))
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0)
+        };
+        (get("inDurationMicros"), get("outDurationMicros"))
+    }
+
     pub fn volume(&self) -> f64 {
         self.extra
             .get("volume")
@@ -316,6 +328,15 @@ impl Clip {
     pub fn label(&self) -> String {
         if let Some(text) = &self.text {
             return text.clone();
+        }
+        // A library sound's real name ("Song – Artist").
+        if let Some(title) = self.extra.get("title").and_then(Value::as_str)
+            && !title.is_empty()
+        {
+            return title.to_string();
+        }
+        if self.kind == "sticker" {
+            return "Sticker".into();
         }
         if self.kind == "effect"
             && let Some(e) = self.effects().first()
@@ -1201,6 +1222,199 @@ impl Project {
         clips.sort_by_key(|c| c.timeline_start);
         clips
     }
+
+    // ---- text, stickers, library sound -------------------------------------
+
+    /// The lane text clips go on (`<project>-text-1`), or the one stickers
+    /// go on (`<project>-overlay-1`, an overlay track that isn't an overlay
+    /// video lane), made on first use above every picture lane, as the
+    /// app's new projects have them. Returns its id.
+    pub fn layer_track(&mut self, stickers: bool) -> String {
+        let overlay_video = overlay_video_prefix(&self.id);
+        let found = self.tracks.iter().find(|t| {
+            if stickers {
+                t.kind == TrackType::Overlay && !t.id.starts_with(&overlay_video)
+            } else {
+                t.kind == TrackType::Text
+            }
+        });
+        if let Some(t) = found {
+            return t.id.clone();
+        }
+        let top = self
+            .tracks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    TrackType::Video | TrackType::Overlay | TrackType::Text
+                )
+            })
+            .map(|t| t.order)
+            .fold(0., f64::max);
+        let (id, kind, name) = if stickers {
+            (
+                format!("{}-overlay-1", self.id),
+                TrackType::Overlay,
+                "Stickers 1",
+            )
+        } else {
+            (format!("{}-text-1", self.id), TrackType::Text, "Text 1")
+        };
+        self.tracks.push(Track {
+            id: id.clone(),
+            kind,
+            name: name.into(),
+            clips: vec![],
+            order: top.floor() + 1.,
+            muted: false,
+            hidden: false,
+            locked: false,
+        });
+        self.extra.insert("layerStack".into(), Value::Bool(true));
+        id
+    }
+
+    fn push_clip(&mut self, track_id: &str, clip: Clip) -> String {
+        let id = clip.id.clone();
+        if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+            t.clips.push(clip);
+        }
+        self.recompute_duration();
+        id
+    }
+
+    /// A new text clip at `at` (3 s, the plain look: Nunito 24, white,
+    /// centred, no entrance). Returns its id.
+    pub fn add_text_clip(&mut self, at: Micros, text: &str) -> String {
+        let lane = self.layer_track(false);
+        let mut clip = Clip {
+            id: new_id("clip"),
+            kind: "text".into(),
+            timeline_start: at.max(0),
+            timeline_duration: TEXT_CLIP_LENGTH,
+            speed: 1.0,
+            source: None,
+            source_start: None,
+            source_duration: None,
+            text: Some(text.into()),
+            hidden: false,
+            extra: Map::new(),
+        };
+        let e = &mut clip.extra;
+        e.insert("fontFamily".into(), "Nunito_400Regular".into());
+        e.insert("fontSize".into(), 24.into());
+        e.insert("color".into(), "#ffffff".into());
+        e.insert("alignment".into(), "center".into());
+        e.insert("entrance".into(), "none".into());
+        e.insert("transform".into(), default_transform());
+        e.insert("effects".into(), Value::Array(vec![]));
+        self.push_clip(&lane, clip)
+    }
+
+    /// A sticker / GIF at `at` (3 s) from its file URL and natural size.
+    pub fn add_sticker_clip(&mut self, at: Micros, url: &str, width: u32, height: u32) -> String {
+        let lane = self.layer_track(true);
+        let mut clip = Clip {
+            id: new_id("clip"),
+            kind: "sticker".into(),
+            timeline_start: at.max(0),
+            timeline_duration: STICKER_CLIP_LENGTH,
+            speed: 1.0,
+            source: Some(url.into()),
+            source_start: None,
+            source_duration: None,
+            text: None,
+            hidden: false,
+            extra: Map::new(),
+        };
+        clip.extra.insert("sourceWidth".into(), width.max(1).into());
+        clip.extra
+            .insert("sourceHeight".into(), height.max(1).into());
+        clip.extra.insert("transform".into(), default_transform());
+        clip.extra.insert("effects".into(), Value::Array(vec![]));
+        self.push_clip(&lane, clip)
+    }
+
+    /// A library sound (music, a sound effect) on the audio lane, fitted
+    /// as the old editor fits it: from the playhead when at least half a
+    /// s of picture is left after it (else from 00:00), no longer than the
+    /// picture runs (the whole sound when there is none).
+    pub fn add_audio_clip_fitted(
+        &mut self,
+        playhead: Micros,
+        path: &str,
+        title: &str,
+        length: Micros,
+    ) -> String {
+        let video_end = self
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackType::Video)
+            .flat_map(|t| t.clips.iter())
+            .map(Clip::end)
+            .max()
+            .unwrap_or(0);
+        let start = if video_end - playhead >= MIN_AUDIO_ROOM {
+            playhead.max(0)
+        } else {
+            0
+        };
+        let length = if video_end > 0 {
+            length.min(video_end - start)
+        } else {
+            length
+        }
+        .max(MIN_AUDIO_CLIP);
+        let mut clip = Clip {
+            id: new_id("clip"),
+            kind: "audio".into(),
+            timeline_start: start,
+            timeline_duration: length,
+            speed: 1.0,
+            source: Some(path.into()),
+            source_start: Some(0),
+            source_duration: Some(length),
+            text: None,
+            hidden: false,
+            extra: Map::new(),
+        };
+        clip.extra.insert("title".into(), title.into());
+        clip.extra.insert("volume".into(), 1.into());
+        clip.extra.insert("muted".into(), false.into());
+        clip.extra.insert("transform".into(), default_transform());
+        clip.extra.insert("effects".into(), Value::Array(vec![]));
+        let lane = match self.tracks.iter().find(|t| t.kind == TrackType::Audio) {
+            Some(t) => t.id.clone(),
+            None => {
+                let id = format!("{}-audio-1", self.id);
+                self.tracks.push(Track {
+                    id: id.clone(),
+                    kind: TrackType::Audio,
+                    name: "Audio 1".into(),
+                    clips: vec![],
+                    order: 0.,
+                    muted: false,
+                    hidden: false,
+                    locked: false,
+                });
+                id
+            }
+        };
+        self.push_clip(&lane, clip)
+    }
+}
+
+/// New text and sticker clips run this long.
+pub const TEXT_CLIP_LENGTH: Micros = 3 * SECOND;
+pub const STICKER_CLIP_LENGTH: Micros = 3 * SECOND;
+/// A library sound starts at the playhead only with this much picture left.
+const MIN_AUDIO_ROOM: Micros = SECOND / 2;
+const MIN_AUDIO_CLIP: Micros = SECOND / 10;
+
+/// A clip's transform as the app's `defaultTransform()`.
+fn default_transform() -> Value {
+    serde_json::json!({ "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1 })
 }
 
 /// The main-track magnet: `after` (an edit of `before`) with its main lane

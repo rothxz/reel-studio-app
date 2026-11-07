@@ -405,7 +405,18 @@ impl Renderer {
             .expect("the compose shader compiles");
         let mut current = targets[0].clone();
         let mut next = 1;
-        for (layer, (t, w, h)) in stack.layers.iter().zip(&pictures) {
+        let after = canvas.passes_after.min(stack.layers.len());
+        for (i, (layer, (t, w, h))) in stack.layers.iter().zip(&pictures).enumerate() {
+            if i == after {
+                self.canvas_passes(
+                    cmd,
+                    &canvas.passes,
+                    &targets,
+                    &mut current,
+                    &mut next,
+                    (cw, ch),
+                );
+            }
             let u = compose_uniforms(&layer.place, (*w, *h), (cw, ch));
             self.draw_with(
                 cmd,
@@ -420,17 +431,38 @@ impl Renderer {
             next = 1 - next;
         }
 
-        // The effect-lane clips over the whole canvas.
-        for pass in &canvas.passes {
+        if after >= stack.layers.len() {
+            self.canvas_passes(
+                cmd,
+                &canvas.passes,
+                &targets,
+                &mut current,
+                &mut next,
+                (cw, ch),
+            );
+        }
+        self.read_back(cmd, &current, cw, ch)
+    }
+
+    /// The effect-lane clips over the canvas composed so far.
+    fn canvas_passes(
+        &mut self,
+        cmd: &CommandBufferRef,
+        passes: &[Pass],
+        targets: &[Texture; 2],
+        current: &mut Texture,
+        next: &mut usize,
+        (cw, ch): (u32, u32),
+    ) {
+        for pass in passes {
             let Some(program) = self.pass_program(pass) else {
                 continue;
             };
             let u = Self::uniforms(pass, cw as f32 / ch as f32);
-            self.draw(cmd, &program, &current, &targets[next], &u, FULL, None);
-            current = targets[next].clone();
-            next = 1 - next;
+            self.draw(cmd, &program, current, &targets[*next], &u, FULL, None);
+            *current = targets[*next].clone();
+            *next = 1 - *next;
         }
-        self.read_back(cmd, &current, cw, ch)
     }
 
     /// A 1×1 texture to bind where a pass reads nothing.
@@ -502,6 +534,11 @@ fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> 
     let fw = (w as f32 * p.crop[2]).max(1.);
     let fh = (h as f32 * p.crop[3]).max(1.);
     let size = (cw / fw).min(ch / fh) * p.scale;
+    // Shown size: contain-fitted, or the picture's own size (text, stickers).
+    let (sw, sh) = match p.natural {
+        Some([nw, nh]) => (nw * cw * p.scale, nh * ch * p.scale),
+        None => (fw * size, fh * size),
+    };
     let rad = p.rotation.to_radians();
     let mut flags = 0u32;
     if p.flip_x {
@@ -526,7 +563,7 @@ fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> 
     };
     [
         [cw, ch, fw / fh, p.blend as f32],
-        [cw / 2. + p.x * cw, ch / 2. + p.y * ch, fw * size, fh * size],
+        [cw / 2. + p.x * cw, ch / 2. + p.y * ch, sw, sh],
         [rad.cos(), rad.sin(), p.opacity, flags as f32],
         p.crop,
         mask0,
@@ -579,6 +616,7 @@ mod tests {
                 background: [1., 0., 0., 1.],
                 backdrop,
                 passes: vec![],
+                passes_after: 0,
             }),
         }
     }
@@ -638,6 +676,19 @@ mod tests {
         assert!(near(at(&out, 4, 4), blue), "{:?}", at(&out, 4, 4));
         assert!(near(at(&out, 7, 4), green));
         assert!(near(at(&out, 5, 1), red));
+
+        // Its own size (text, stickers): a quarter of the canvas wide and
+        // high whatever its pixels, centred: x 3..5, y 3..5.
+        let natural = Placement {
+            natural: Some([0.25, 0.25]),
+            ..Placement::default()
+        };
+        let (_, _, out) = r.render(&[frame()], None, &on_canvas(vec![placed(natural)], None));
+        assert!(near(at(&out, 2, 4), red), "{:?}", at(&out, 2, 4));
+        assert!(near(at(&out, 3, 4), blue), "{:?}", at(&out, 3, 4));
+        assert!(near(at(&out, 4, 4), green));
+        assert!(near(at(&out, 5, 4), red), "{:?}", at(&out, 5, 4));
+        assert!(near(at(&out, 4, 2), red));
 
         // Mirrored: green on the left.
         let mirror = Placement {
@@ -786,6 +837,7 @@ mod tests {
                 background: [1., 0., 0., 1.],
                 backdrop: None,
                 passes: vec![effect(EffectKind::Plus, "return vec3(0.0, k, 0.0);", 0.25)],
+                passes_after: 1,
             }),
         };
         let (w, h, out) = r.render(&[frame()], None, &stack);

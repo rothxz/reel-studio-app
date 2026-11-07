@@ -48,7 +48,7 @@ const MAX_ZOOM: f64 = 10_000.;
 const SLIDER_MAX_ZOOM: f64 = 400.;
 
 /// The Background colours (none first is its own tile).
-const SWATCHES: [&str; 18] = [
+pub(crate) const SWATCHES: [&str; 18] = [
     "#000000", "#ffffff", "#3a3a3c", "#8e8e93", "#d1d1d6", "#ff3b30", "#ff9500", "#ffcc00",
     "#34c759", "#00c7be", "#30b0c7", "#007aff", "#5856d6", "#af52de", "#ff2d55", "#a2845e",
     "#f4e1c1", "#1c3d5a",
@@ -95,7 +95,7 @@ fn mask_icon(shape: MaskShape) -> Icon {
     }
 }
 
-fn hex(s: &str) -> gpui::Rgba {
+pub(crate) fn hex(s: &str) -> gpui::Rgba {
     let h = s.trim_start_matches('#');
     u32::from_str_radix(h, 16)
         .ok()
@@ -150,7 +150,7 @@ impl Editor {
 
     /// A property at clip-local `local`: keyframes evaluated by the engine,
     /// else the clip's own value.
-    fn property_at(&self, clip: &Clip, id: &str, local: Micros) -> Option<f64> {
+    pub(crate) fn property_at(&self, clip: &Clip, id: &str, local: Micros) -> Option<f64> {
         let own = clip.static_property(id);
         if clip.is_animated() {
             self.engine.clip_property(&clip.id, id, local).or(own)
@@ -192,7 +192,22 @@ impl Editor {
         let live = self
             .live_property()
             .filter(|_| self.selected.primary() == Some(clip.id.as_str()));
+        // A layer held on the player: its transform so far.
+        let held = self
+            .live_xform
+            .as_ref()
+            .filter(|(id, _)| *id == clip.id)
+            .map(|(_, x)| *x);
         let get = |id: &str, def: f64| -> f32 {
+            if let Some(x) = held {
+                match id {
+                    "transform.x" => return x.x,
+                    "transform.y" => return x.y,
+                    "transform.scale" => return x.scale,
+                    "transform.rotation" => return x.rotation,
+                    _ => {}
+                }
+            }
             match live {
                 Some((p, v)) if p == id => v as f32,
                 _ => self.property_at(clip, id, local).unwrap_or(def) as f32,
@@ -236,11 +251,23 @@ impl Editor {
             crop,
             mask,
             blend,
+            natural: None,
         }
     }
 
     /// The clip's picture size (its crop box of the source), when known.
     pub fn clip_frame_size(&self, clip: &Clip) -> Option<(f64, f64)> {
+        // A sticker's size is in the document (its file is a URL: never
+        // probed here, on the UI thread).
+        if clip.kind == "sticker" {
+            let n = |k: &str| {
+                clip.extra
+                    .get(k)
+                    .and_then(|v| v.as_f64())
+                    .filter(|v| *v > 0.)
+            };
+            return Some((n("sourceWidth")?, n("sourceHeight")?));
+        }
         let src = clip.source.as_ref()?;
         let (w, h) = self
             .media
@@ -270,7 +297,7 @@ impl Editor {
     // ---- edits ---------------------------------------------------------------------
 
     /// One undoable change to a clip (`f` says whether it changed it).
-    fn edit_clip(
+    pub(crate) fn edit_clip(
         &mut self,
         clip_id: &str,
         label: &'static str,
@@ -673,7 +700,7 @@ impl Editor {
     /// value (`per_px` a pixel), committed once on release. `commit` None:
     /// it only reads out (a slider's).
     #[allow(clippy::too_many_arguments)]
-    fn number_field(
+    pub(crate) fn number_field(
         &self,
         key: &'static str,
         prefix: Option<&'static str>,
@@ -754,7 +781,7 @@ impl Editor {
     }
 
     /// The section's reset (greyed when already at the defaults).
-    fn reset_button(
+    pub(crate) fn reset_button(
         &self,
         id: &'static str,
         enabled: bool,
@@ -820,7 +847,7 @@ impl Editor {
     }
 
     /// A row of colour dots (`none` first when given); the chosen one ringed.
-    fn swatch_row(
+    pub(crate) fn swatch_row(
         &self,
         key: &'static str,
         colors: &[&'static str],

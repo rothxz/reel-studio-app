@@ -178,11 +178,12 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         .flat_map(|s| {
             s.combos.iter().map(|combo| {
                 // The dialog toggle works with the dialog open, everything
-                // else only while the editor itself has the keyboard.
+                // else only while the editor itself has the keyboard (not
+                // a text field, where Space, ⌫ and letters are typing).
                 let context = if s.id == Shortcut::ShowShortcuts {
                     None
                 } else {
-                    Some("Editor")
+                    Some("Editor && !TextInput")
                 };
                 KeyBinding::load(
                     combo,

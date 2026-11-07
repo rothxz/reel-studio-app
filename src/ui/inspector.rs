@@ -357,6 +357,8 @@ impl Editor {
             Some("splice") => self.render_splice_panel(clip, cx),
             Some("background") => self.render_background_panel(clip, cx),
             Some("effects") => self.render_effect_settings(cx),
+            Some("volume") => self.render_volume_panel(clip, cx),
+            Some("text:basic") => self.render_text_panel(clip, cx),
             Some(key) => {
                 let label = tabs
                     .iter()

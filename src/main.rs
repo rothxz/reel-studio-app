@@ -1,15 +1,20 @@
 mod assets;
+mod audio;
 mod catalog;
 mod decoder;
 mod editor;
 mod effects;
 mod engine;
+mod gizmo;
 mod history;
+mod library;
 mod model;
 mod prefs;
 mod projects;
 mod selection;
 mod shortcuts;
+mod stickers;
+mod text_render;
 mod theme;
 mod ui;
 mod visual;
@@ -34,6 +39,7 @@ fn item(id: Shortcut) -> MenuItem {
 
 fn main() {
     decoder::init();
+    text_render::warm_up();
     Application::new()
         .with_assets(ui::icons::Assets)
         .run(|cx: &mut App| {
@@ -41,6 +47,7 @@ fn main() {
                 eprintln!("bundled fonts didn't load: {e}");
             }
             cx.bind_keys(shortcuts::key_bindings());
+            cx.bind_keys(ui::text_input::bindings());
             cx.bind_keys([
                 KeyBinding::new("secondary-i", ImportMedia, None),
                 KeyBinding::new("secondary-o", OpenProject, None),

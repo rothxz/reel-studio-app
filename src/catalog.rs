@@ -170,14 +170,14 @@ pub fn default_parameters(params: &[ParamSpec]) -> Vec<(String, f64)> {
 // ---- the served table ----------------------------------------------------
 
 /// The catalog database's REST endpoint + publishable key, if configured.
-fn database() -> Option<(String, String)> {
+pub fn database() -> Option<(String, String)> {
     let url = assets::setting("REEL_CATALOG_URL", env!("REEL_CATALOG_URL"))?;
     let key = assets::setting("REEL_CATALOG_KEY", env!("REEL_CATALOG_KEY"))?;
     Some((url.trim_end_matches('/').to_string(), key))
 }
 
 /// Escapes a value for a PostgREST filter inside a URL query.
-fn query_value(s: &str) -> String {
+pub fn query_value(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {

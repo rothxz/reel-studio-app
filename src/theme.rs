@@ -126,6 +126,10 @@ pub fn clip_caption() -> Rgba {
 pub fn selected() -> Rgba {
     rgb(0xffffff)
 }
+/// Selected text in a field (white, monochrome chrome).
+pub fn selection() -> Rgba {
+    rgba(0xffffff40)
+}
 pub fn playhead() -> Rgba {
     rgb(0xffffff)
 }

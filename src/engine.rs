@@ -5,13 +5,46 @@
 
 use crate::model::{Micros, Project};
 
+/// What a visible / audible clip is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerKind {
+    Video,
+    Audio,
+    Image,
+    Text,
+    Sticker,
+    Effect,
+    /// Drawings and anything newer.
+    Other,
+}
+
+impl LayerKind {
+    /// The stand-in engine reads kinds from the document.
+    #[cfg_attr(feature = "cpp-engine", allow(dead_code))]
+    fn of(kind: &str) -> Self {
+        match kind {
+            "video" => LayerKind::Video,
+            "audio" => LayerKind::Audio,
+            "image" => LayerKind::Image,
+            "text" => LayerKind::Text,
+            "sticker" => LayerKind::Sticker,
+            "effect" => LayerKind::Effect,
+            _ => LayerKind::Other,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ActiveLayer {
     pub clip_id: String,
     pub source: String,
     /// Source time to show, already through speed / curve / reverse / freeze.
     pub source_time: Micros,
+    /// How far into the clip (timeline time).
+    pub offset: Micros,
+    /// A video / photo layer (decoded from its file).
     pub is_visual: bool,
+    pub kind: LayerKind,
 }
 
 #[cfg(feature = "cpp-engine")]
@@ -74,8 +107,14 @@ mod imp {
     // videoengine::PlaybackState
     const PLAYING: i32 = 2;
     // videoengine::ClipKind: Video, Audio, Image, Text, Sticker, Effect
-    const KIND_VIDEO: i32 = 0;
-    const KIND_IMAGE: i32 = 2;
+    const KINDS: [LayerKind; 6] = [
+        LayerKind::Video,
+        LayerKind::Audio,
+        LayerKind::Image,
+        LayerKind::Text,
+        LayerKind::Sticker,
+        LayerKind::Effect,
+    ];
 
     pub struct Engine(*mut RawEngine);
 
@@ -124,15 +163,23 @@ mod imp {
             let n = unsafe { reel_engine_active_layers(self.0, t, raw.as_mut_ptr(), raw.len()) };
             raw[..n]
                 .iter()
-                .map(|l| ActiveLayer {
-                    clip_id: unsafe { CStr::from_ptr(l.clip_id) }
-                        .to_string_lossy()
-                        .into_owned(),
-                    source: unsafe { CStr::from_ptr(l.source) }
-                        .to_string_lossy()
-                        .into_owned(),
-                    source_time: l.source_time,
-                    is_visual: l.kind == KIND_VIDEO || l.kind == KIND_IMAGE,
+                .map(|l| {
+                    let kind = KINDS
+                        .get(l.kind as usize)
+                        .copied()
+                        .unwrap_or(LayerKind::Other);
+                    ActiveLayer {
+                        clip_id: unsafe { CStr::from_ptr(l.clip_id) }
+                            .to_string_lossy()
+                            .into_owned(),
+                        source: unsafe { CStr::from_ptr(l.source) }
+                            .to_string_lossy()
+                            .into_owned(),
+                        source_time: l.source_time,
+                        offset: l.offset_into_clip,
+                        is_visual: matches!(kind, LayerKind::Video | LayerKind::Image),
+                        kind,
+                    }
                 })
                 .collect()
         }
@@ -241,8 +288,10 @@ mod imp {
                                 } else {
                                     ((t - c.timeline_start) as f64 * c.speed) as Micros
                                 },
+                            offset: t - c.timeline_start,
                             is_visual: matches!(track.kind, TrackType::Video | TrackType::Overlay)
                                 && (c.kind == "video" || c.kind == "image"),
+                            kind: LayerKind::of(&c.kind),
                         })
                 })
                 .collect()

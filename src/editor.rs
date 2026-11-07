@@ -17,19 +17,24 @@ use gpui::{
 };
 
 use crate::assets::{self, Picture, PictureJob, PictureServer};
+use crate::audio::Audio;
 use crate::catalog::EffectCatalog;
 use crate::decoder::{self, DecodedFrame, FrameServer, TileServer, Waveform};
 use crate::effects::package::{self as fx_package, Fetched, Packages};
 use crate::effects::stack::{self as fx_stack, LiveParam, Needs, Sources, Stack};
 use crate::effects::{self, Rendered};
-use crate::engine::{self, Engine};
+use crate::engine::{self, Engine, LayerKind};
 use crate::history::History;
 use crate::model::{self, Clip, MediaItem, Micros, Project, SECOND, Side, TrackType};
 use crate::prefs::Prefs;
 use crate::projects;
 use crate::selection::Selection;
 use crate::shortcuts::{self, Shortcut};
+use crate::stickers::{self, StickerFrames};
+use crate::text_render::{self, RasterCache, TextStyle};
 use crate::theme;
+use crate::ui::library::LibraryUi;
+use crate::ui::text_input::{InputEvent, TextInput};
 use crate::ui::timeline_edit::{ClipDrag, KeyframeDrag, Marquee, MediaDrop};
 
 actions!(
@@ -41,6 +46,8 @@ actions!(
 const PREVIEW_MAX_WIDTH: u32 = 1280;
 /// Filmstrip tiles are decoded this wide (a 44 px tile at 2×, some slack).
 const TILE_MAX_WIDTH: u32 = 128;
+/// A sticker at scale 1 fits in this share of the canvas's short side.
+const STICKER_FRACTION: f32 = 0.4;
 
 // Layout (old editor's desktop layout).
 pub const HEADER_HEIGHT: f32 = 40.;
@@ -128,6 +135,8 @@ pub enum Drag {
     Marquee(Box<Marquee>),
     /// A keyframe diamond on the selected clip: a click seeks, a drag moves.
     Keyframe(Box<KeyframeDrag>),
+    /// A layer moved, or scaled and turned, on the player (`ui/gizmo.rs`).
+    Gizmo(Box<crate::ui::gizmo::GizmoDrag>),
 }
 
 /// A picture the player shows: its clip, and the frame server decoding it.
@@ -135,6 +144,12 @@ pub struct WantedLayer {
     pub key: String,
     pub source: String,
     pub clip_id: String,
+    pub kind: LayerKind,
+    /// A text layer's picture: its pixels per canvas px.
+    pub raster_px: f32,
+    /// A text layer's words and background, px of its picture (the
+    /// on-canvas selection box; the picture also holds glow and shadow).
+    pub content: Option<[f32; 2]>,
 }
 
 /// A copied clip, pasted back onto its lane (or the first of its kind).
@@ -285,6 +300,19 @@ pub struct Editor {
     pub(crate) anims: Vec<(String, Arc<RenderImage>)>,
     pub(crate) pictures_pending: RefCell<HashSet<PictureJob>>,
     pub(crate) picture_server: PictureServer,
+    /// Tile pictures by URL (stickers, album covers).
+    remote_pictures: PictureServer,
+    /// The browser's Audio / Text / Sticker views.
+    pub(crate) lib: LibraryUi,
+    /// Sound out (None: no output device).
+    pub(crate) audio: Option<Audio>,
+    /// When the sound was last (re)started with the picture.
+    audio_synced_at: Instant,
+    /// The inspector's field for a text clip's words, the clip it shows,
+    /// and a request to give it the keyboard (a new text clip).
+    pub(crate) text_field: gpui::Entity<TextInput>,
+    text_field_clip: Option<String>,
+    pub(crate) focus_text_field: bool,
     /// The effect / filter tile under the pointer (its animation plays).
     pub(crate) fx_hover: Option<String>,
     /// The effect grid's scroll (more rows load near the end).
@@ -323,6 +351,21 @@ pub struct Editor {
     layer_frames: HashMap<String, Arc<DecodedFrame>>,
     /// Background photos, decoded once (None: on its way, or it failed).
     backdrop_images: HashMap<String, Option<Arc<DecodedFrame>>>,
+    /// Text clips drawn as pictures, by look.
+    text_rasters: RasterCache,
+    /// Sticker / GIF clips' frames by URL (None: loading, or it failed).
+    pub(crate) stickers: HashMap<String, Option<Arc<StickerFrames>>>,
+    /// Stickers the preview wanted but nobody has loaded yet.
+    stickers_wanted: Vec<String>,
+    /// A held text slider: (clip, field, value) shown before release.
+    pub(crate) live_text: Option<(String, &'static str, serde_json::Value)>,
+    /// A layer being moved / scaled / turned on the player: its transform
+    /// so far (shown before the edit lands on release), and what it
+    /// snapped to (the guide lines).
+    pub(crate) live_xform: Option<(String, crate::gizmo::Xform)>,
+    pub(crate) gizmo_snap: crate::gizmo::Snapped,
+    /// What the pointer is over on the player (its cursor).
+    pub(crate) gizmo_hover: Option<crate::ui::gizmo::GizmoHover>,
     frame_seq: u64,
     /// Effect / filter shaders downloaded this session.
     pub(crate) packages: Packages,
@@ -387,6 +430,11 @@ impl Editor {
 
         let focus = cx.focus_handle();
         window.focus(&focus);
+        let text_field = cx.new(|cx| TextInput::new("Enter text", true, cx).max_len(500));
+        cx.subscribe(&text_field, |ed: &mut Editor, _, ev: &InputEvent, cx| {
+            ed.on_text_field(ev, cx)
+        })
+        .detach();
         let project = Project::empty();
         let mut engine = Engine::new();
         if let Err(e) = engine.load(&project) {
@@ -430,7 +478,14 @@ impl Editor {
             stills: HashMap::new(),
             anims: vec![],
             pictures_pending: RefCell::default(),
-            picture_server: PictureServer::new(assets::EFFECT_PREVIEWS, picture_tx),
+            picture_server: PictureServer::new(assets::EFFECT_PREVIEWS, picture_tx.clone()),
+            remote_pictures: PictureServer::new(assets::REMOTE, picture_tx),
+            lib: LibraryUi::new(cx),
+            audio: Audio::new(),
+            audio_synced_at: Instant::now(),
+            text_field,
+            text_field_clip: None,
+            focus_text_field: false,
             fx_hover: None,
             fx_scroll: gpui::ScrollHandle::new(),
             inspector_entry: None,
@@ -450,6 +505,13 @@ impl Editor {
             requested: HashMap::new(),
             layer_frames: HashMap::new(),
             backdrop_images: HashMap::new(),
+            text_rasters: RasterCache::default(),
+            stickers: HashMap::new(),
+            live_xform: None,
+            gizmo_snap: Default::default(),
+            gizmo_hover: None,
+            stickers_wanted: vec![],
+            live_text: None,
             frame_seq: 0,
             packages: Packages::default(),
             live_fx: None,
@@ -483,7 +545,11 @@ impl Editor {
         if have || !self.pictures_pending.borrow_mut().insert(job.clone()) {
             return;
         }
-        self.picture_server.request(job);
+        if key.starts_with("https://") || key.starts_with("http://") {
+            self.remote_pictures.request(job);
+        } else {
+            self.picture_server.request(job);
+        }
     }
 
     fn on_picture(&mut self, p: Picture, cx: &mut Context<Self>) {
@@ -725,6 +791,11 @@ impl Editor {
         if self.thumbs.contains_key(&path) {
             return;
         }
+        // A sticker / GIF by URL: its first frame, once it's loaded.
+        if path.starts_with("http://") || path.starts_with("https://") {
+            self.want_sticker(path, cx);
+            return;
+        }
         let task = cx
             .background_executor()
             .spawn(async move { decoder::thumbnail(&path, at, 320) });
@@ -799,8 +870,10 @@ impl Editor {
             .tracks
             .iter()
             .flat_map(|t| t.clips.iter())
+            // Stickers are online files, not library media.
+            .filter(|c| c.kind != "sticker")
             .filter_map(|c| c.source.clone())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://"))
             .collect();
         for src in sources {
             if let Ok(item) = decoder::probe(&src) {
@@ -1523,6 +1596,84 @@ impl Editor {
         cx.notify();
     }
 
+    /// Keeps the sound with the picture: playing from the engine's time
+    /// while it plays (restarted if they drift apart), quiet otherwise.
+    fn sync_audio(&mut self) {
+        let playing = self.engine.is_playing();
+        let Some(audio) = self.audio.as_mut() else {
+            return;
+        };
+        if playing {
+            let drifted = audio
+                .position()
+                .is_some_and(|p| (p - self.playhead).abs() > 120_000);
+            let settled = self.audio_synced_at.elapsed() > Duration::from_millis(600);
+            if !audio.is_playing() || (drifted && settled) {
+                audio.play(Arc::new(self.project.clone()), self.playhead);
+                self.audio_synced_at = Instant::now();
+            }
+        } else if audio.is_playing() {
+            audio.stop();
+        }
+    }
+
+    /// The inspector's text field follows the selected text clip (its
+    /// words, unless it's being typed in); a new clip's field takes the
+    /// keyboard with its words selected.
+    fn sync_text_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let clip = self
+            .selected_clip()
+            .filter(|(_, c)| c.kind == "text")
+            .map(|(_, c)| (c.id.clone(), c.text.clone().unwrap_or_default()));
+        let Some((id, text)) = clip else {
+            self.text_field_clip = None;
+            return;
+        };
+        let focused = self.text_field.read(cx).is_focused(window);
+        let other = self.text_field_clip.as_deref() != Some(id.as_str());
+        if other || !focused {
+            self.text_field.update(cx, |f, cx| f.set_text(&text, cx));
+        }
+        self.text_field_clip = Some(id);
+        if std::mem::take(&mut self.focus_text_field) {
+            self.text_field.update(cx, |f, cx| {
+                f.focus(window);
+                f.select_everything(cx);
+            });
+        }
+    }
+
+    /// The text field's typing: the selected text clip's words (a quick
+    /// run of typing is one undo step); Esc gives the keyboard back.
+    fn on_text_field(&mut self, ev: &InputEvent, cx: &mut Context<Self>) {
+        match ev {
+            InputEvent::Changed(text) => {
+                let Some(id) = self.text_field_clip.clone() else {
+                    return;
+                };
+                let text = text.clone();
+                let key = format!("text:{id}");
+                self.edit(
+                    "Edit Text",
+                    false,
+                    Some(key),
+                    |p| {
+                        p.update_clip(&id, |c| {
+                            if c.text.as_deref() == Some(text.as_str()) {
+                                return false;
+                            }
+                            c.text = Some(text);
+                            true
+                        })
+                    },
+                    cx,
+                );
+            }
+            InputEvent::Submit(_) => {}
+            InputEvent::Blur => cx.notify(),
+        }
+    }
+
     /// Drops every picture the player was showing.
     fn forget_layers(&mut self) {
         self.wanted.clear();
@@ -1530,18 +1681,106 @@ impl Editor {
         self.layer_frames.clear();
     }
 
-    /// Asks the decoders of every visible picture (video / photo on a
-    /// visual lane) for its frame at the preview time. Each layer has its
-    /// own decoder, keyed by file and its turn among the layers of that
-    /// file, so two layers of one file don't fight over one.
+    /// Asks for every visible layer's picture at the preview time: the
+    /// decoders of videos and photos (each layer its own, keyed by file and
+    /// its turn among the layers of that file, so two layers of one file
+    /// don't fight over one decoder), text drawn from its look, a sticker's
+    /// frame (loaded first: until then it's left out).
     pub(crate) fn request_preview(&mut self) {
-        let layers: Vec<_> = self
-            .engine
-            .active_layers(self.preview_time())
+        let mut active = self.engine.active_layers(self.preview_time());
+        // Back to front by stack order: the clip's own, else its lane's
+        // (a text / sticker lane can sit under an overlay video).
+        let project = &self.project;
+        let order = |clip_id: &str| {
+            project.find_clip(clip_id).map_or(0., |(t, c)| {
+                c.extra
+                    .get("stackOrder")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(t.order)
+            })
+        };
+        active.sort_by(|a, b| order(&a.clip_id).total_cmp(&order(&b.clip_id)));
+        let layers: Vec<_> = active
             .into_iter()
-            .filter(|l| l.is_visual && !l.source.is_empty())
+            .filter(|l| match l.kind {
+                LayerKind::Video | LayerKind::Image | LayerKind::Sticker => {
+                    (l.is_visual || l.kind == LayerKind::Sticker) && !l.source.is_empty()
+                }
+                LayerKind::Text => true,
+                _ => false,
+            })
             .collect();
-        if layers.is_empty() {
+        let mut wanted = Vec::with_capacity(layers.len());
+        for layer in layers {
+            match layer.kind {
+                LayerKind::Text => {
+                    let Some((key, frame, raster_px, content)) =
+                        self.text_layer(&layer.clip_id, layer.offset)
+                    else {
+                        continue; // nothing to write yet
+                    };
+                    self.set_layer_frame(&key, frame);
+                    wanted.push(WantedLayer {
+                        key,
+                        source: String::new(),
+                        clip_id: layer.clip_id,
+                        kind: LayerKind::Text,
+                        raster_px,
+                        content: Some(content),
+                    });
+                }
+                LayerKind::Sticker => {
+                    let frames = match self.stickers.get(&layer.source) {
+                        Some(Some(f)) => f.clone(),
+                        Some(None) => continue, // loading, or it failed
+                        None => {
+                            if !self.stickers_wanted.contains(&layer.source) {
+                                self.stickers_wanted.push(layer.source.clone());
+                            }
+                            continue;
+                        }
+                    };
+                    let key = format!("sticker:{}", layer.clip_id);
+                    self.set_layer_frame(&key, frames.at(layer.offset));
+                    wanted.push(WantedLayer {
+                        key,
+                        source: layer.source,
+                        clip_id: layer.clip_id,
+                        kind: LayerKind::Sticker,
+                        raster_px: 1.,
+                        content: None,
+                    });
+                }
+                _ => {
+                    let turn = wanted
+                        .iter()
+                        .filter(|w: &&WantedLayer| w.source == layer.source)
+                        .count();
+                    let key = format!("{}#{turn}", layer.source);
+                    if self.requested.get(&key) != Some(&layer.source_time) {
+                        let server = self.servers.entry(key.clone()).or_insert_with(|| {
+                            FrameServer::spawn(
+                                layer.source.clone(),
+                                key.clone(),
+                                PREVIEW_MAX_WIDTH,
+                                self.frame_tx.clone(),
+                            )
+                        });
+                        server.request(layer.source_time);
+                        self.requested.insert(key.clone(), layer.source_time);
+                    }
+                    wanted.push(WantedLayer {
+                        key,
+                        source: layer.source,
+                        clip_id: layer.clip_id,
+                        kind: layer.kind,
+                        raster_px: 1.,
+                        content: None,
+                    });
+                }
+            }
+        }
+        if wanted.is_empty() {
             self.forget_layers();
             if let Some(old) = self.frame.take() {
                 self.stale_frames.push(old);
@@ -1549,37 +1788,143 @@ impl Editor {
             self.frame_info = None;
             return;
         }
-        let mut wanted = Vec::with_capacity(layers.len());
-        for layer in layers {
-            let turn = wanted
-                .iter()
-                .filter(|w: &&WantedLayer| w.source == layer.source)
-                .count();
-            let key = format!("{}#{turn}", layer.source);
-            if self.requested.get(&key) != Some(&layer.source_time) {
-                let server = self.servers.entry(key.clone()).or_insert_with(|| {
-                    FrameServer::spawn(
-                        layer.source.clone(),
-                        key.clone(),
-                        PREVIEW_MAX_WIDTH,
-                        self.frame_tx.clone(),
-                    )
-                });
-                server.request(layer.source_time);
-                self.requested.insert(key.clone(), layer.source_time);
-            }
-            wanted.push(WantedLayer {
-                key,
-                source: layer.source,
-                clip_id: layer.clip_id,
-            });
-        }
         // Layers gone from view: their frames and decoders go too.
         let keys: HashSet<&str> = wanted.iter().map(|w| w.key.as_str()).collect();
         self.layer_frames.retain(|k, _| keys.contains(k.as_str()));
         self.requested.retain(|k, _| keys.contains(k.as_str()));
         self.servers.retain(|k, _| keys.contains(k.as_str()));
         self.wanted = wanted;
+    }
+
+    /// A picture made here (text, a sticker frame) as a layer's frame; a
+    /// new one is composed on the next render.
+    fn set_layer_frame(&mut self, key: &str, frame: Arc<DecodedFrame>) {
+        if self
+            .layer_frames
+            .get(key)
+            .is_some_and(|f| Arc::ptr_eq(f, &frame))
+        {
+            return;
+        }
+        self.layer_frames.insert(key.to_string(), frame);
+        self.frame_seq += 1;
+    }
+
+    /// A text clip drawn `offset` into it: its layer key, picture and
+    /// pixels per canvas px. Drawn at the preview's canvas size times its
+    /// zoom (in quarter octaves), so it stays sharp when scaled up; the
+    /// compositor scales the rest.
+    fn text_layer(
+        &mut self,
+        clip_id: &str,
+        offset: Micros,
+    ) -> Option<(String, Arc<DecodedFrame>, f32, [f32; 2])> {
+        let (_, clip) = self.project.find_clip(clip_id)?;
+        let mut style = TextStyle::from_clip(clip);
+        if let Some((id, field, value)) = &self.live_text
+            && id == clip_id
+        {
+            let mut patched = clip.clone();
+            patched.extra.insert((*field).to_string(), value.clone());
+            style = TextStyle::from_clip(&patched);
+        }
+        let zoom = self
+            .property_at(clip, "transform.scale", offset)
+            .unwrap_or(1.)
+            .clamp(0.05, 20.) as f32;
+        let raster_zoom = 2f32.powf((zoom.log2() * 4.).round() / 4.).clamp(0.25, 6.);
+        let canvas = (
+            self.project.canvas.width.max(1),
+            self.project.canvas.height.max(1),
+        );
+        let fx_scale = self.fx_canvas_px().0 as f32 / canvas.0 as f32;
+        let raster_px = fx_scale * raster_zoom;
+        let px_per_unit = text_render::unit_px(canvas.0, canvas.1) * raster_px;
+        let (frame, content) = self.text_rasters.get_or_draw(&style, canvas, px_per_unit)?;
+        Some((format!("text:{clip_id}"), frame, raster_px, content))
+    }
+
+    /// A text / sticker layer's own size at zoom 1 (canvas widths,
+    /// heights) from its picture `f`; None for videos and photos, which
+    /// are contain-fitted.
+    pub(crate) fn layer_natural(
+        &self,
+        w: &WantedLayer,
+        c: &Clip,
+        f: &DecodedFrame,
+    ) -> Option<[f32; 2]> {
+        let (cw, ch) = (
+            self.project.canvas.width.max(1) as f32,
+            self.project.canvas.height.max(1) as f32,
+        );
+        match w.kind {
+            // Its picture's own size (drawn `raster_px` per canvas px).
+            LayerKind::Text => Some([
+                f.width as f32 / w.raster_px / cw,
+                f.height as f32 / w.raster_px / ch,
+            ]),
+            // Fitted in 40 % of the canvas's short side.
+            LayerKind::Sticker => {
+                let sw = c.extra.get("sourceWidth").and_then(|v| v.as_f64());
+                let sh = c.extra.get("sourceHeight").and_then(|v| v.as_f64());
+                let (sw, sh) = match (sw, sh) {
+                    (Some(a), Some(b)) if a > 0. && b > 0. => (a as f32, b as f32),
+                    _ => (f.width as f32, f.height as f32),
+                };
+                let side = cw.min(ch) * STICKER_FRACTION;
+                let fit = (side / sw).min(side / sh);
+                Some([sw * fit / cw, sh * fit / ch])
+            }
+            _ => None,
+        }
+    }
+
+    /// The pictures the player shows now (back to front) with their last
+    /// frame, for the on-canvas gizmo.
+    pub(crate) fn shown_layers(&self) -> impl Iterator<Item = (&WantedLayer, &Arc<DecodedFrame>)> {
+        self.wanted
+            .iter()
+            .filter_map(|w| Some((w, self.layer_frames.get(&w.key)?)))
+    }
+
+    /// Starts loading the stickers the preview asked for.
+    fn load_stickers(&mut self, cx: &mut Context<Self>) {
+        for url in std::mem::take(&mut self.stickers_wanted) {
+            self.want_sticker(url, cx);
+        }
+    }
+
+    /// Downloads and decodes a sticker unless it's here or on its way;
+    /// its first frame becomes its timeline picture.
+    pub(crate) fn want_sticker(&mut self, url: String, cx: &mut Context<Self>) {
+        if self.stickers.contains_key(&url) {
+            return;
+        }
+        self.stickers.insert(url.clone(), None);
+        let u = url.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { stickers::load(&u) });
+        cx.spawn(async move |this, cx| {
+            let loaded = task.await;
+            this.update(cx, |ed, cx| {
+                match loaded {
+                    Ok(frames) => {
+                        let (w, h, bgra) = frames.thumb.clone();
+                        if let Some(buffer) = image::RgbaImage::from_raw(w, h, bgra) {
+                            let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+                            ed.thumbs.insert(url.clone(), image);
+                        }
+                        ed.stickers.insert(url, Some(Arc::new(frames)));
+                    }
+                    Err(e) => eprintln!("sticker {url}: {e:#}"),
+                }
+                ed.request_preview();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// What the player shows: the hovered time while the preview axis is
@@ -1667,8 +2012,13 @@ impl Editor {
             let clips: Vec<(&Clip, fx_stack::Placement)> = self
                 .wanted
                 .iter()
-                .filter_map(|w| self.project.find_clip(&w.clip_id).map(|(_, c)| c))
-                .map(|c| (c, self.layer_placement(c, t)))
+                .zip(&frames)
+                .filter_map(|(w, f)| {
+                    let (_, c) = self.project.find_clip(&w.clip_id)?;
+                    let mut place = self.layer_placement(c, t);
+                    place.natural = self.layer_natural(w, c, f);
+                    Some((c, place))
+                })
                 .collect();
             if clips.len() != frames.len() {
                 return; // the document moved on; the next request catches up
@@ -2006,6 +2356,7 @@ impl Editor {
             Drag::Clip(_) => self.update_clip_drag(e.position, cx),
             Drag::Marquee(_) => self.update_marquee(e.position, cx),
             Drag::Keyframe(_) => self.update_keyframe_drag(e.position, cx),
+            Drag::Gizmo(_) => self.update_gizmo_drag(e.position, cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Nudge { origin, apply } => {
                 let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
@@ -2077,6 +2428,7 @@ impl Editor {
             }
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
+            Some(Drag::Gizmo(d)) => self.commit_gizmo_drag(*d, cx),
             _ => {}
         }
         cx.notify();
@@ -2093,9 +2445,17 @@ impl Render for Editor {
             self.request_preview();
             window.request_animation_frame();
         }
+        // A text field let go of the keyboard (Esc): the shortcuts get it back.
+        if self.screen == Screen::Editor && window.focused(cx).is_none() {
+            window.focus(&self.focus);
+        }
+        self.load_stickers(cx);
+        self.sync_audio();
+        self.sync_text_field(window, cx);
         self.refresh_picture(cx);
         self.tick_edge_scroll(window, cx);
         self.prefetch_effects(cx);
+        self.prefetch_library(cx);
         // A drag over the timeline that ended elsewhere leaves no ghost.
         if self.media_drop.is_some() && !cx.has_active_drag() {
             self.media_drop = None;

@@ -2,7 +2,10 @@
 //! on near-black), and the transport bar under it: timecode | go to start,
 //! previous frame, play, next frame, go to end | ratio, full screen.
 
-use gpui::{AnyElement, Context, FontWeight, ObjectFit, Rgba, div, img, prelude::*, px, rgb};
+use gpui::{
+    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Rgba,
+    div, img, prelude::*, px, rgb,
+};
 
 use crate::editor::{Editor, PopupItem, timecode};
 use crate::shortcuts::Shortcut;
@@ -116,8 +119,26 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .overflow_hidden()
+                    .cursor(self.gizmo_cursor())
+                    // Layers are picked, moved, scaled and turned here
+                    // (`ui/gizmo.rs`).
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ed, e: &MouseDownEvent, _, cx| ed.gizmo_mouse_down(e, cx)),
+                    )
+                    .on_mouse_move(cx.listener(|ed, e: &MouseMoveEvent, _, cx| {
+                        if ed.drag.is_none() {
+                            ed.gizmo_hover_at(e.position, cx);
+                        }
+                    }))
+                    .on_hover(cx.listener(|ed, hovered: &bool, _, cx| {
+                        if !*hovered && ed.gizmo_hover.take().is_some() {
+                            cx.notify();
+                        }
+                    }))
                     .child(self.measure("player-area"))
                     .child(canvas)
+                    .when(!empty, |d| d.children(self.render_gizmo(cx)))
                     .when(empty, |d| {
                         d.child(
                             div()
