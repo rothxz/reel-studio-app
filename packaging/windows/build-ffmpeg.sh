@@ -40,8 +40,20 @@ if link --version 2> /dev/null | grep -q GNU; then
 fi
 
 fetch() { # url sha256 out
-  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 \
-    --speed-limit 4096 --speed-time 60 -o "$3" "$1"
+  # A dropped connection resumes where it stopped (-C -).
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsSL -C - --connect-timeout 30 --speed-limit 4096 --speed-time 60 \
+      -o "$3" "$1"; then
+      break
+    fi
+    if [ "$i" = 10 ]; then
+      echo "download failed: $1" >&2
+      return 1
+    fi
+    echo "download interrupted, resuming ($i/10)" >&2
+    sleep 2
+  done
   echo "$2  $3" | sha256sum -c -
 }
 

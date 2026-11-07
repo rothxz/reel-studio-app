@@ -59,11 +59,30 @@ name: Release
 on:
   push:
     branches: [release]
+  # A manual run (Actions → Release → Run workflow, on any branch) is a
+  # test build by default: the same downloads as a release, kept as the
+  # run's artifacts (7 days) to try in VMs, nothing published. It runs in
+  # the `release-test` environment: give that environment the same
+  # REEL_* secrets (deployment branches: any) to build on the C++ engine;
+  # without them the test build uses the Rust stand-in, with a warning.
+  # Tick "publish" on the `release` branch to publish as a push does.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a GitHub Release (release branch, all platforms only)
+        type: boolean
+        default: false
+      platforms:
+        description: Platforms to build
+        type: choice
+        default: all
+        options: [all, windows, linux, macos]
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  # Releases queue one after another; a test build only replaces an
+  # earlier test build of the same branch.
+  group: ${{ github.event_name == 'push' && 'release' || format('release-test-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' && !inputs.publish }}
 
 permissions:
   contents: read
@@ -72,6 +91,11 @@ env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "11.0"
   PRERELEASE: "true"
+  # true: a release (push to `release`, or a manual run with publish);
+  # false: a test build.
+  PUBLISH: ${{ (github.event_name == 'push' || inputs.publish) && 'true' || 'false' }}
+  # Which environment holds the secrets (see `workflow_dispatch` above).
+  SECRETS_ENV: ${{ (github.event_name == 'push' || inputs.publish) && 'release' || 'release-test' }}
 
 jobs:
   version:
@@ -83,6 +107,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check the run
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          if [ "$GITHUB_REF_NAME" != release ] || [ "${{ inputs.platforms }}" != all ]; then
+            echo "::error::Publish only from the release branch with all platforms (this run: ${GITHUB_REF_NAME}, ${{ inputs.platforms }})"
+            exit 1
+          fi
       - id: version
         run: |
           base=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -93,6 +124,7 @@ jobs:
   build:
     name: macOS (${{ matrix.arch }})
     needs: version
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'macos'
     strategy:
       fail-fast: true
       matrix:
@@ -103,7 +135,7 @@ jobs:
           - arch: x64
             target: x86_64-apple-darwin
     runs-on: macos-latest
-    environment: release
+    environment: ${{ (github.event_name == 'push' || inputs.publish) && 'release' || 'release-test' }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/${{ matrix.arch }}
@@ -126,15 +158,20 @@ jobs:
             [ -n "${!s}" ] || missing+=("$s")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            # Without them the app ships with no engine, effects, filters or library.
-            echo "::error::Set the secrets (release environment): ${missing[*]}"
-            exit 1
+            if [ "$PUBLISH" = true ]; then
+              # Without them the app ships with no engine, effects, filters or library.
+              echo "::error::Set the secrets ($SECRETS_ENV environment): ${missing[*]}"
+              exit 1
+            fi
+            echo "::warning::Test build without ${missing[*]} ($SECRETS_ENV environment): the Rust stand-in instead of the C++ engine without REEL_STUDIO_TOKEN; no effects, filters or library without the REEL_* config"
           fi
+          if [ -n "$REEL_STUDIO_TOKEN" ]; then echo "engine=true" >> "$GITHUB_OUTPUT"; fi
           # Signing is optional; later steps only learn whether it's set.
           if [ -n "$MAC_CSC_LINK" ]; then echo "sign=true" >> "$GITHUB_OUTPUT"; fi
 
       # Only the folders build.rs reads: the engine core and the filter data.
       - name: Check out the engine (private)
+        if: steps.secrets.outputs.engine == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rothxz/reel-studio
@@ -176,7 +213,7 @@ jobs:
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
         run: |
           log="$RUNNER_TEMP/build.log"
-          if cargo build --release --locked --features cpp-engine --target "${{ matrix.target }}" > "$log" 2>&1; then
+          if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} --target "${{ matrix.target }}" > "$log" 2>&1; then
             tail -n 3 "$log"
             exit 0
           fi
@@ -235,6 +272,7 @@ jobs:
   linux:
     name: Linux (${{ matrix.arch }})
     needs: version
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'linux'
     strategy:
       fail-fast: true
       matrix:
@@ -245,7 +283,7 @@ jobs:
             runner: ubuntu-22.04-arm
     # The oldest glibc the app supports is the one it's built on.
     runs-on: ${{ matrix.runner }}
-    environment: release
+    environment: ${{ (github.event_name == 'push' || inputs.publish) && 'release' || 'release-test' }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/linux-${{ matrix.arch }}
@@ -255,6 +293,7 @@ jobs:
           persist-credentials: false
 
       - name: Check secrets
+        id: secrets
         env:
           REEL_STUDIO_TOKEN: ${{ secrets.REEL_STUDIO_TOKEN }}
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
@@ -266,12 +305,18 @@ jobs:
             [ -n "${!s}" ] || missing+=("$s")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Set the secrets (release environment): ${missing[*]}"
-            exit 1
+            if [ "$PUBLISH" = true ]; then
+              # Without them the app ships with no engine, effects, filters or library.
+              echo "::error::Set the secrets ($SECRETS_ENV environment): ${missing[*]}"
+              exit 1
+            fi
+            echo "::warning::Test build without ${missing[*]} ($SECRETS_ENV environment): the Rust stand-in instead of the C++ engine without REEL_STUDIO_TOKEN; no effects, filters or library without the REEL_* config"
           fi
+          if [ -n "$REEL_STUDIO_TOKEN" ]; then echo "engine=true" >> "$GITHUB_OUTPUT"; fi
 
       # Only the folders build.rs reads: the engine core and the filter data.
       - name: Check out the engine (private)
+        if: steps.secrets.outputs.engine == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rothxz/reel-studio
@@ -313,7 +358,7 @@ jobs:
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
         run: |
           log="$RUNNER_TEMP/build.log"
-          if cargo build --release --locked --features cpp-engine > "$log" 2>&1; then
+          if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} > "$log" 2>&1; then
             tail -n 3 "$log"
             exit 0
           fi
@@ -344,8 +389,9 @@ jobs:
   windows:
     name: Windows (x64)
     needs: version
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'windows'
     runs-on: windows-2022
-    environment: release
+    environment: ${{ (github.event_name == 'push' || inputs.publish) && 'release' || 'release-test' }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       FFMPEG_DIR: ${{ github.workspace }}\.ffmpeg\windows-x64
@@ -373,12 +419,18 @@ jobs:
             [ -n "${!s}" ] || missing+=("$s")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Set the secrets (release environment): ${missing[*]}"
-            exit 1
+            if [ "$PUBLISH" = true ]; then
+              # Without them the app ships with no engine, effects, filters or library.
+              echo "::error::Set the secrets ($SECRETS_ENV environment): ${missing[*]}"
+              exit 1
+            fi
+            echo "::warning::Test build without ${missing[*]} ($SECRETS_ENV environment): the Rust stand-in instead of the C++ engine without REEL_STUDIO_TOKEN; no effects, filters or library without the REEL_* config"
           fi
+          if [ -n "$REEL_STUDIO_TOKEN" ]; then echo "engine=true" >> "$GITHUB_OUTPUT"; fi
           if [ -n "$WIN_SIGN_PFX" ]; then echo "sign=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Check out the engine (private)
+        if: steps.secrets.outputs.engine == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rothxz/reel-studio
@@ -427,7 +479,7 @@ jobs:
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
         run: |
           log="$RUNNER_TEMP/build.log"
-          if cargo build --release --locked --features cpp-engine > "$log" 2>&1; then
+          if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} > "$log" 2>&1; then
             tail -n 3 "$log"
             exit 0
           fi
@@ -463,6 +515,8 @@ jobs:
   release:
     name: GitHub Release
     needs: [version, build, linux, windows]
+    # Test builds stop at the artifacts.
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
