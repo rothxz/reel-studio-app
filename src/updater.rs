@@ -359,7 +359,9 @@ fn feed_url() -> String {
     std::env::var("REEL_UPDATE_FEED")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("https://api.github.com/repos/{REPO}/releases?per_page=30"))
+        // The repo also holds the old shell's releases: a full page (the
+        // API's most) keeps ours in reach between them.
+        .unwrap_or_else(|| format!("https://api.github.com/repos/{REPO}/releases?per_page=100"))
 }
 
 fn find_update() -> Result<Option<Found>> {

@@ -28,7 +28,10 @@ prefix=$(cd "$prefix" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 tarball="$work/ffmpeg-$VERSION.tar.xz"
-curl -fsSL --retry 3 -o "$tarball" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
+# ffmpeg.org can crawl: give up on a stalled transfer (under 4 KB/s for a
+# minute) and retry, instead of hanging a CI job.
+curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 \
+  --speed-limit 4096 --speed-time 60 -o "$tarball" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
 echo "$SHA256  $tarball" | shasum -a 256 -c -
 tar -xf "$tarball" -C "$work"
 cd "$work/ffmpeg-$VERSION"

@@ -29,11 +29,16 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [ ] Settings dialog (language, appearance, storage, updates).
+- [~] Settings dialog: Updates and About (version). *No language,
+  appearance or storage yet.*
 - [~] Toasts (single slot, 1.6 s, as the old app), confirm dialog, popup
   menus. *No blocking progress dialog yet.*
-- [ ] Auto-update + installers (mac dmg/zip, Windows, Linux) to replace
-  electron-builder / electron-updater.
+- [~] Auto-update + installers to replace electron-builder /
+  electron-updater: macOS done (dmg + zip, signed / notarized when the
+  secrets are set, `native-v…` releases from `release.yml`; check on
+  launch + every 4 h, Download, Restart now / Later installs on quit).
+  *Windows, Linux to do; moving Electron users onto the native app is
+  still to decide.*
 
 ## Header
 
@@ -523,4 +528,6 @@ items, tooltips and the dialog.
 - [x] macOS (Apple Silicon) builds and runs
 - [ ] Windows, Linux builds (GPUI supports both; FFmpeg + engine backends)
 - [ ] Khmer / Vietnamese / Chinese / Indonesian UI strings and fonts
-- [ ] Bundled FFmpeg (LGPL, trimmed) instead of Homebrew dylibs
+- [x] Bundled FFmpeg (LGPL, static, decode only) instead of Homebrew dylibs
+  in released apps (`packaging/macos/build-ffmpeg.sh`)
+- [x] CI: fmt, clippy, tests on every pull request (`ci.yml`)

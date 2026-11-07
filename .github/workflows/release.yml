@@ -1,0 +1,254 @@
+# macOS release of the native app: every push to `release` (a merged PR,
+# usually main → release, as the old desktop build releases from its own
+# branch) builds Apple silicon + Intel apps and publishes a GitHub Release
+# `native-v<version>` in this repo, the feed src/updater.rs reads:
+#
+#   Reel-Studio-<version>-mac-<arm64|x64>.zip   installed by the in-app updater
+#   Reel-Studio-<version>-mac-<arm64|x64>.dmg   for downloading by hand
+#   update.json                                 version + per-platform url / SHA-256 / size
+#
+# The same repo holds the previous desktop build's `v<version>` releases,
+# whose updater follows the release GitHub marks "Latest". So these are
+# published with --latest=false (and as pre-releases until the native app
+# replaces the old one: flip PRERELEASE below then).
+#
+# Version = Cargo.toml's major.minor + this workflow's run number
+# (0.2.0 → 0.2.57), so every merge is a new release without a bump commit.
+# Bump major/minor in Cargo.toml by hand.
+#
+# Secrets:
+#   REEL_STUDIO_TOKEN   required. Fine-grained token, Contents: read on the
+#                       private app repo (rothxz/reel-studio): the engine
+#                       sources and the filter catalog are compiled in from
+#                       it, never committed here.
+#   REEL_ASSETS_URL, REEL_CATALOG_URL, REEL_CATALOG_KEY
+#                       required. The app's public client config (asset
+#                       host, catalog database URL + publishable key); the
+#                       same values as the app's EXPO_PUBLIC_ASSETS_URL /
+#                       EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_KEY.
+#   MAC_CSC_LINK (base64 .p12, Developer ID Application), MAC_CSC_KEY_PASSWORD
+#                       sign; APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
+#                       APPLE_TEAM_ID notarize. Optional: without them the
+#                       apps are ad-hoc signed (they run and update, but
+#                       Gatekeeper asks on first open).
+#
+# This repo is public, and so are its Actions logs: the build step keeps
+# compiler output about the private engine sources out of them.
+name: Release (macOS)
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  PRERELEASE: "true"
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          base=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          version="$(echo "$base" | cut -d. -f1-2).${GITHUB_RUN_NUMBER}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          # Cross-built on the Apple silicon runner.
+          - arch: x64
+            target: x86_64-apple-darwin
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/${{ matrix.arch }}
+      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check secrets
+        env:
+          REEL_STUDIO_TOKEN: ${{ secrets.REEL_STUDIO_TOKEN }}
+          REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
+          REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
+          REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
+        run: |
+          missing=()
+          for s in REEL_STUDIO_TOKEN REEL_ASSETS_URL REEL_CATALOG_URL REEL_CATALOG_KEY; do
+            [ -n "${!s}" ] || missing+=("$s")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            # Without them the app ships with no engine, effects, filters or library.
+            echo "::error::Set the repo secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      # Only the folders build.rs reads: the engine core and the filter data.
+      - name: Check out the engine (private)
+        uses: actions/checkout@v7
+        with:
+          repository: rothxz/reel-studio
+          token: ${{ secrets.REEL_STUDIO_TOKEN }}
+          path: reel-studio
+          sparse-checkout: |
+            modules/video-engine/cpp
+            src/data
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Newer Xcodes ship the Metal compiler (gpui's shaders) separately.
+      - name: Metal toolchain
+        run: xcrun -f metal > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache FFmpeg
+        id: ffmpeg
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.FFMPEG_DIR }}
+          key: ffmpeg-${{ matrix.arch }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('packaging/macos/build-ffmpeg.sh') }}
+
+      - name: Build FFmpeg (static, LGPL)
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          [ "${{ matrix.arch }}" = x64 ] && brew install nasm
+          packaging/macos/build-ffmpeg.sh "${{ matrix.arch }}" "$FFMPEG_DIR"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        env:
+          REEL_VERSION: ${{ env.VERSION }}
+          REEL_ENGINE_DIR: ${{ github.workspace }}/reel-studio/modules/video-engine/cpp
+          REEL_APP_DIR: ${{ github.workspace }}/reel-studio
+          REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
+          REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
+          REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
+        run: |
+          log="$RUNNER_TEMP/build.log"
+          if cargo build --release --locked --features cpp-engine --target "${{ matrix.target }}" > "$log" 2>&1; then
+            tail -n 3 "$log"
+            exit 0
+          fi
+          if grep -q 'failed to run custom build command for `reel-studio-gpui' "$log"; then
+            # The engine (C++) failed: its compiler output quotes private
+            # sources, so only the error lines go to this public log.
+            echo "::error::The engine failed to build; compiler output withheld (public log). Errors:"
+            grep -E ': (fatal )?error:' "$log" | sed -E 's#^.*/(modules/video-engine/cpp/)#\1#' | head -n 40
+          else
+            cat "$log"
+          fi
+          exit 1
+
+      - name: Import signing certificate
+        if: env.MAC_CSC_LINK != ''
+        env:
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          echo "$MAC_CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MAC_CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | grep -o '"Developer ID Application: [^"]*"' | head -n 1 | tr -d '"')
+          if [ -z "$identity" ]; then
+            echo "::error::MAC_CSC_LINK has no Developer ID Application identity"
+            exit 1
+          fi
+          echo "MAC_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Bundle, sign, notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          packaging/macos/bundle.sh "target/${{ matrix.target }}/release/reel-studio-gpui" \
+            "$VERSION" "${{ matrix.arch }}" dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: native-v${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mac-*
+          path: out
+          merge-multiple: true
+
+      - name: update.json
+        run: |
+          packaging/update-manifest.sh "$VERSION" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG" \
+            out/*.zip > out/update.json
+          cat out/update.json
+
+      # The manifest goes up last: the updater only sees a release once its
+      # update.json is there, so it never finds a half-uploaded one.
+      - name: Publish ${{ env.TAG }}
+        run: |
+          ls -la out
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-run keeps its run number, so the release already exists.
+            gh release upload "$TAG" out/*.zip out/*.dmg --clobber
+            gh release upload "$TAG" out/update.json --clobber
+          else
+            flags=(--latest=false)
+            [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+            gh release create "$TAG" out/*.zip out/*.dmg --draft "${flags[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "Reel Studio $VERSION (native)" \
+              --notes "Native macOS app, built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
+            gh release upload "$TAG" out/update.json
+            gh release edit "$TAG" --draft=false "${flags[@]}"
+          fi
