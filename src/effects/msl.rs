@@ -351,7 +351,8 @@ mod tests {
 /// in metal.rs): texture 0 is the canvas so far, texture 1 the picture
 /// after its own looks. For each canvas pixel the clip's transform is run
 /// backwards to a point in its frame; outside the frame the canvas shows
-/// through. The frame point is mirrored, then cropped into the source;
+/// through. The frame point is mirrored, then cropped (and straightened)
+/// into the source;
 /// the shape mask is measured in the same (mirrored) frame space, in frame
 /// heights so a turned mask stays true on a wide frame. The picture's
 /// alpha × mask × opacity mixes the Splice blend of the two over the
@@ -397,6 +398,7 @@ struct ComposeUniforms {
     float4 crop;    // x, y, width, height in the source, 0..1
     float4 mask0;   // centre x, y, width, height (frame units)
     float4 mask1;   // cos, sin of the mask's turn, feather, shape
+    float4 straight; // cos, sin of the crop's turn undone, its cover scale, source aspect
 };
 
 // Flags in turn.w.
@@ -529,7 +531,16 @@ fragment float4 fx_fragment(FxVaryings in [[stage_in]], texture2d<float> below [
     if (flags & MIRROR_X) f.x = 1.0 - f.x;
     if (flags & MIRROR_Y) f.y = 1.0 - f.y;
     f = clamp(f, 0.0, 1.0);
-    float4 pic = fx_straight(picture.sample(smp, u.crop.xy + f * u.crop.zw));
+    // Into the source: the crop box, then the straighten (the source turned
+    // about the box's centre and grown by the cover scale), in source pixels
+    // shaped by its aspect.
+    float2 shape = float2(u.straight.w, 1.0);
+    float2 centre = (u.crop.xy + u.crop.zw * 0.5) * shape;
+    float2 d = (u.crop.xy + f * u.crop.zw) * shape - centre;
+    float2 v = float2(d.x * u.straight.x - d.y * u.straight.y,
+                      d.x * u.straight.y + d.y * u.straight.x) / u.straight.z;
+    float2 src = clamp((centre + v) / shape, 0.0, 1.0);
+    float4 pic = fx_straight(picture.sample(smp, src));
     float cover = 1.0;
     if (flags & HAS_MASK) {
         cover = cm_mask(u, f);

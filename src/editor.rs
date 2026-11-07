@@ -137,6 +137,10 @@ pub enum Drag {
     Keyframe(Box<KeyframeDrag>),
     /// A layer moved, or scaled and turned, on the player (`ui/gizmo.rs`).
     Gizmo(Box<crate::ui::gizmo::GizmoDrag>),
+    /// The Crop dialog's box moved or one of its handles (`ui/crop.rs`).
+    Crop(Box<crate::ui::crop::CropDrag>),
+    /// A tile held in the Layers panel (`ui/layers.rs`).
+    Layer(Box<crate::ui::layers::LayerDrag>),
 }
 
 /// A picture the player shows: its clip, and the frame server decoding it.
@@ -319,6 +323,10 @@ pub struct Editor {
     pub(crate) fx_scroll: gpui::ScrollHandle,
     /// The inspector's open sub-tab (entry key) for the selected clip.
     pub(crate) inspector_entry: Option<&'static str>,
+    /// Arrange layers, open in the inspector over the clip's sub-tab.
+    pub(crate) layers_panel: Option<crate::ui::layers::LayersPanel>,
+    /// The Crop dialog, while it's open.
+    pub(crate) crop: Option<crate::ui::crop::CropSession>,
     /// Where measured elements sit in the window, by name.
     pub(crate) bounds: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
 
@@ -378,7 +386,7 @@ pub struct Editor {
     fx_seq: u64,
     fx_shown: u64,
     pub(crate) frame: Option<Arc<RenderImage>>,
-    stale_frames: Vec<Arc<RenderImage>>,
+    pub(crate) stale_frames: Vec<Arc<RenderImage>>,
     pub(crate) frame_info: Option<(u32, u32, Micros)>,
     fps_window: (Instant, u32),
     pub(crate) preview_fps: f32,
@@ -489,6 +497,8 @@ impl Editor {
             fx_hover: None,
             fx_scroll: gpui::ScrollHandle::new(),
             inspector_entry: None,
+            layers_panel: None,
+            crop: None,
             bounds: Rc::default(),
             lane_scroll_y: 0.,
             hover: None,
@@ -1137,6 +1147,12 @@ impl Editor {
             return;
         }
         if self.screen == Screen::Home && id != Shortcut::ShowShortcuts {
+            return;
+        }
+        if self.crop.is_some() {
+            if id == Shortcut::Deselect {
+                self.cancel_crop(cx);
+            }
             return;
         }
         if self.shortcuts_open {
@@ -2327,7 +2343,7 @@ impl Editor {
             )
     }
 
-    fn on_root_mouse_move(
+    pub(crate) fn on_root_mouse_move(
         &mut self,
         e: &MouseMoveEvent,
         window: &mut Window,
@@ -2357,6 +2373,8 @@ impl Editor {
             Drag::Marquee(_) => self.update_marquee(e.position, cx),
             Drag::Keyframe(_) => self.update_keyframe_drag(e.position, cx),
             Drag::Gizmo(_) => self.update_gizmo_drag(e.position, cx),
+            Drag::Crop(_) => self.update_crop_drag(e.position, cx),
+            Drag::Layer(_) => self.update_layer_drag(cx),
             Drag::Zoom => self.zoom_slider_to(e.position.x, cx),
             Drag::Nudge { origin, apply } => {
                 let (dx, apply) = (f32::from(e.position.x) - *origin, apply.clone());
@@ -2411,7 +2429,7 @@ impl Editor {
         }
     }
 
-    fn end_drag(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn end_drag(&mut self, cx: &mut Context<Self>) {
         match self.drag.take() {
             Some(Drag::Splitter { .. }) => self.prefs.save(),
             Some(Drag::Slider { apply, .. }) => {
@@ -2429,6 +2447,7 @@ impl Editor {
             Some(Drag::Clip(d)) => self.commit_clip_drag(*d, cx),
             Some(Drag::Keyframe(d)) => self.commit_keyframe_drag(*d, cx),
             Some(Drag::Gizmo(d)) => self.commit_gizmo_drag(*d, cx),
+            Some(Drag::Layer(d)) => self.commit_layer_drag(*d, cx),
             _ => {}
         }
         cx.notify();
@@ -2448,6 +2467,10 @@ impl Render for Editor {
         // A text field let go of the keyboard (Esc): the shortcuts get it back.
         if self.screen == Screen::Editor && window.focused(cx).is_none() {
             window.focus(&self.focus);
+        }
+        // Arrange layers goes with the selection.
+        if self.selected.primary().is_none() {
+            self.layers_panel = None;
         }
         self.load_stickers(cx);
         self.sync_audio();
@@ -2480,6 +2503,13 @@ impl Render for Editor {
                 cx.listener(|ed, _, window, _| window.focus(&ed.focus)),
             )
             .on_mouse_move(cx.listener(Self::on_root_mouse_move))
+            // Return confirms the Crop dialog.
+            .on_key_down(cx.listener(|ed, e: &gpui::KeyDownEvent, _, cx| {
+                if ed.crop.is_some() && e.keystroke.key == "enter" {
+                    cx.stop_propagation();
+                    ed.confirm_crop(cx);
+                }
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|ed, _, _, cx| ed.end_drag(cx)),
@@ -2635,6 +2665,9 @@ impl Editor {
         }
         if self.shortcuts_open {
             out.push(crate::ui::dialogs::shortcuts_dialog(cx).into_any_element());
+        }
+        if let Some(dialog) = self.render_crop_dialog(viewport, cx) {
+            out.push(dialog);
         }
         if let Some(confirm) = &self.confirm {
             out.push(crate::ui::dialogs::confirm_dialog(confirm, cx).into_any_element());

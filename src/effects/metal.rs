@@ -529,7 +529,7 @@ fn as_bytes<T: Copy>(v: &T) -> &[u8] {
 /// The compose pass's uniforms (`ComposeUniforms` in msl.rs) for a picture
 /// `w`×`h` placed by `p` on a canvas `cw`×`ch`: contain-fitted (its crop
 /// box), then scaled, turned clockwise about its centre and moved.
-fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> [[f32; 4]; 6] {
+fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> [[f32; 4]; 7] {
     let (cw, ch) = (cw as f32, ch as f32);
     let fw = (w as f32 * p.crop[2]).max(1.);
     let fh = (h as f32 * p.crop[3]).max(1.);
@@ -568,7 +568,23 @@ fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> 
         p.crop,
         mask0,
         mask1,
+        straighten(p, (w, h)),
     ]
+}
+
+/// The crop's straighten for the shader: cos, sin of the turn undone, the
+/// cover scale, the source's aspect.
+fn straighten(p: &Placement, (w, h): (u32, u32)) -> [f32; 4] {
+    let (sw, sh) = (w.max(1) as f64, h.max(1) as f64);
+    let [x, y, bw, bh] = p.crop.map(f64::from);
+    let k = crate::crop::cover_scale(
+        crate::crop::CropBox { x, y, w: bw, h: bh },
+        p.crop_turn as f64,
+        sw,
+        sh,
+    );
+    let rad = (-p.crop_turn).to_radians();
+    [rad.cos(), rad.sin(), k as f32, (sw / sh) as f32]
 }
 
 #[cfg(test)]

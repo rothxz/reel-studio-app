@@ -1,9 +1,11 @@
 //! The bar over the timeline: undo / redo, the Select / Split tool and
-//! Delete left / right, the selected clip's one-shot actions, then on the
+//! Delete left / right, the selected clip's one-shot actions (a video's:
+//! Replace, Crop, Duplicate, Split, Delete, Freeze, Extract audio,
+//! Overlay, Layers), then on the
 //! right the keyframe ◇, the timeline switches (main track magnet, linkage,
 //! preview axis, auto snapping, fit) and zoom.
 
-use gpui::{Context, MouseButton, MouseDownEvent, div, prelude::*, px};
+use gpui::{Context, MouseButton, MouseDownEvent, Window, div, prelude::*, px};
 
 use crate::editor::{Drag, Editor, MAX_PPS, MIN_PPS, Tool};
 use crate::shortcuts::Shortcut;
@@ -12,39 +14,112 @@ use crate::ui::icons::Icon;
 use crate::ui::widgets::{icon_button, slider_track, vdivider};
 
 /// A clip action on the toolbar: the clip tools that aren't settings (the
-/// inspector has those). Only the ones the native editor can run yet.
-struct ClipAction {
-    key: &'static str,
-    label: &'static str,
-    icon: Icon,
-    shortcut: Option<Shortcut>,
+/// inspector has those) nor picks (the browser has those). Only the ones
+/// the native editor can run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipAction {
+    Replace,
+    Crop,
+    Duplicate,
+    Split,
+    Delete,
+    Freeze,
+    ExtractAudio,
+    Overlay,
+    Layers,
+}
+
+impl ClipAction {
+    fn key(self) -> &'static str {
+        match self {
+            ClipAction::Replace => "replace",
+            ClipAction::Crop => "crop",
+            ClipAction::Duplicate => "duplicate",
+            ClipAction::Split => "split",
+            ClipAction::Delete => "delete",
+            ClipAction::Freeze => "freeze",
+            ClipAction::ExtractAudio => "extractAudio",
+            ClipAction::Overlay => "overlay",
+            ClipAction::Layers => "layers",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ClipAction::Replace => "Replace",
+            ClipAction::Crop => "Crop",
+            ClipAction::Duplicate => "Duplicate",
+            ClipAction::Split => "Split",
+            ClipAction::Delete => "Delete",
+            ClipAction::Freeze => "Freeze",
+            ClipAction::ExtractAudio => "Extract audio",
+            ClipAction::Overlay => "Overlay",
+            ClipAction::Layers => "Layers",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            ClipAction::Replace => Icon::SwapHorizontal,
+            ClipAction::Crop => Icon::Crop,
+            ClipAction::Duplicate => Icon::Copy,
+            ClipAction::Split => Icon::Split,
+            ClipAction::Delete => Icon::Trash,
+            ClipAction::Freeze => Icon::Snowflake,
+            ClipAction::ExtractAudio => Icon::ExtractAudio,
+            ClipAction::Overlay => Icon::Layers,
+            ClipAction::Layers => Icon::MdiLayers,
+        }
+    }
+
+    fn shortcut(self) -> Option<Shortcut> {
+        match self {
+            ClipAction::Split => Some(Shortcut::SplitClip),
+            ClipAction::Delete => Some(Shortcut::DeleteClip),
+            ClipAction::Duplicate => Some(Shortcut::Duplicate),
+            _ => None,
+        }
+    }
+
+    fn run(self, ed: &mut Editor, window: &mut Window, cx: &mut Context<Editor>) {
+        match self {
+            ClipAction::Replace => ed.replace_selected(cx),
+            ClipAction::Crop => {
+                if let Some(id) = ed.selected.primary().map(str::to_owned) {
+                    ed.open_crop(&id, cx);
+                }
+            }
+            ClipAction::Duplicate => ed.run(Shortcut::Duplicate, window, cx),
+            ClipAction::Split => ed.run(Shortcut::SplitClip, window, cx),
+            ClipAction::Delete => ed.run(Shortcut::DeleteClip, window, cx),
+            ClipAction::Freeze => ed.freeze_selected(cx),
+            ClipAction::ExtractAudio => ed.extract_audio_selected(cx),
+            ClipAction::Overlay => ed.toggle_overlay_selected(cx),
+            ClipAction::Layers => ed.open_layers_panel(cx),
+        }
+    }
 }
 
 /// The selected clip's actions, in the old editor's order for its kind.
-fn clip_actions(kind: &str) -> Vec<ClipAction> {
-    let split = ClipAction {
-        key: "split",
-        label: "Split",
-        icon: Icon::Split,
-        shortcut: Some(Shortcut::SplitClip),
-    };
-    let delete = ClipAction {
-        key: "delete",
-        label: "Delete",
-        icon: Icon::Trash,
-        shortcut: Some(Shortcut::DeleteClip),
-    };
-    let duplicate = ClipAction {
-        key: "duplicate",
-        label: "Duplicate",
-        icon: Icon::Copy,
-        shortcut: Some(Shortcut::Duplicate),
-    };
+fn clip_actions(kind: &str) -> &'static [ClipAction] {
+    use ClipAction::*;
     match kind {
-        "sticker" => vec![delete, duplicate],
-        "effect" | "drawing" => vec![split, duplicate, delete],
-        "video" | "image" | "audio" | "text" => vec![split, delete, duplicate],
-        _ => vec![delete, duplicate],
+        "video" => &[
+            Replace,
+            Crop,
+            Duplicate,
+            Split,
+            Delete,
+            Freeze,
+            ExtractAudio,
+            Overlay,
+            Layers,
+        ],
+        "image" => &[Replace, Crop, Duplicate, Split, Delete, Overlay, Layers],
+        "sticker" => &[Delete, Duplicate],
+        "effect" | "drawing" => &[Split, Duplicate, Delete],
+        "audio" | "text" => &[Split, Delete, Duplicate],
+        _ => &[Delete, Duplicate],
     }
 }
 
@@ -61,21 +136,15 @@ impl Editor {
 
         let clip_buttons: Vec<_> = match &selected_kind {
             Some(kind) => clip_actions(kind)
-                .into_iter()
-                .map(|a| {
-                    let key = a.key;
+                .iter()
+                .map(|&a| {
                     icon_button(
-                        gpui::SharedString::from(format!("clip-action-{key}")),
-                        a.icon,
-                        a.label,
+                        gpui::SharedString::from(format!("clip-action-{}", a.key())),
+                        a.icon(),
+                        a.label(),
                     )
-                    .shortcut_opt(a.shortcut)
-                    .on_click(cx.listener(move |ed, _, w, cx| match key {
-                        "split" => ed.run(Shortcut::SplitClip, w, cx),
-                        "delete" => ed.run(Shortcut::DeleteClip, w, cx),
-                        "duplicate" => ed.run(Shortcut::Duplicate, w, cx),
-                        _ => {}
-                    }))
+                    .shortcut_opt(a.shortcut())
+                    .on_click(cx.listener(move |ed, _, w, cx| a.run(ed, w, cx)))
                     .into_any_element()
                 })
                 .collect(),

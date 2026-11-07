@@ -1,6 +1,8 @@
 mod assets;
 mod audio;
 mod catalog;
+mod clip_edits;
+mod crop;
 mod decoder;
 mod editor;
 mod effects;

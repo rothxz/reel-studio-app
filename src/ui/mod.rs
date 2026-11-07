@@ -3,6 +3,8 @@
 
 pub mod audio_panel;
 pub mod browser;
+pub mod clip_tools;
+pub mod crop;
 pub mod dialogs;
 pub mod fx;
 pub mod gizmo;
@@ -10,6 +12,7 @@ pub mod header;
 pub mod home;
 pub mod icons;
 pub mod inspector;
+pub mod layers;
 pub mod library;
 pub mod player;
 pub mod text_input;

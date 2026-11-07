@@ -157,6 +157,11 @@ icons! {
     Brush => (MDI, 0xf00e3),
     HeartOutline => (MDI, 0xf02d5),
     StarOutline => (MDI, 0xf04d2),
+    MdiLayers => (MDI, 0xf09fe),
+    SkipBackOutline => (ION, 0xf4dc),
+    SkipForwardOutline => (ION, 0xf4e2),
+    Refresh => (ION, 0xf514),
+    ExpandOutline => (ION, 0xf2e1),
 }
 
 impl Icon {

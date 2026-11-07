@@ -222,6 +222,12 @@ impl Editor {
                 [0., 0., 1., 1.]
             }
         });
+        let crop_turn = clip
+            .extra
+            .get("crop")
+            .and_then(|c| c.get("rotation"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.) as f32;
         let mask = clip.mask().map(|m| MaskPlan {
             shape: MaskShape::ALL
                 .iter()
@@ -249,6 +255,7 @@ impl Editor {
             flip_x: clip.flipped(false),
             flip_y: clip.flipped(true),
             crop,
+            crop_turn,
             mask,
             blend,
             natural: None,
@@ -1214,10 +1221,11 @@ impl Editor {
                 )),
             )
             .child(vrule())
-            .child(
-                tool("crop", Icon::Crop, "Crop", false, false)
-                    .tooltip(tooltip("Crop isn't in the native editor yet", None)),
-            );
+            .child({
+                let id = clip.id.clone();
+                tool("crop", Icon::Crop, "Crop", false, true)
+                    .on_click(cx.listener(move |ed, _, _, cx| ed.open_crop(&id, cx)))
+            });
         body([
             section_with("Rotate", true, []).into_any_element(),
             row.into_any_element(),

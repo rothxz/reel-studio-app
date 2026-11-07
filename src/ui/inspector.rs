@@ -289,8 +289,11 @@ impl Editor {
             .inspector_entry
             .filter(|k| tabs.iter().any(|(_, es)| es.iter().any(|e| e.key == *k)))
             .or_else(|| tabs.first().and_then(|(_, es)| es.first()).map(|e| e.key));
+        // Arrange layers sits in the body instead: no tab is lit.
+        let layers = self.layers_panel.is_some();
         let current_tab = tabs
             .iter()
+            .filter(|_| !layers)
             .find(|(_, es)| es.iter().any(|e| Some(e.key) == current));
 
         let tab_row = div()
@@ -325,6 +328,7 @@ impl Editor {
                     .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .on_click(cx.listener(move |ed, _, _, cx| {
                         ed.inspector_entry = Some(first);
+                        ed.layers_panel = None;
                         cx.notify();
                     }))
                     .child(tab.label)
@@ -349,6 +353,7 @@ impl Editor {
             });
 
         let body = match current {
+            _ if layers => self.render_layers_panel(cx),
             Some("speed") => self.render_speed_panel(clip, cx).into_any_element(),
             Some("basic") => self.render_basic_panel(clip, cx),
             Some("rotate") => self.render_rotate_panel(clip, main_lane, cx),

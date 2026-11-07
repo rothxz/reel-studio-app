@@ -70,6 +70,10 @@ src/shortcuts.rs   the shortcut table → key bindings, menu, tooltips, dialog
 src/history.rs     undo / redo (document snapshots, coalesced per gesture)
 src/model.rs       Project document (serde): same JSON as the app; unknown fields
                    kept in `extra`; clip edits + `with_magnet`
+src/clip_edits.rs the toolbar's one-shot clip edits on the document:
+                   freeze frame, extract audio, replace media, crop,
+                   arrange layers
+src/crop.rs        crop math (box, handles, ratio fit, straighten cover)
 src/projects.rs    projects folder: list / load / save (atomic) / delete
 src/prefs.rs       panel sizes + timeline switches, data folder
 src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
@@ -97,7 +101,9 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    effect clip's settings, Adjust sliders, their edits),
                    library (Audio / Text / Sticker views), text_input (the
                    text field), text_panel, audio_panel,
-                   player, inspector, toolbar,
+                   player, inspector, toolbar, clip_tools (the
+                   toolbar's Replace / Freeze / Extract audio / Overlay),
+                   crop (the Crop dialog), layers (Arrange layers),
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
                    dialogs (popup, confirm, shortcuts), widgets,
