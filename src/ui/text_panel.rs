@@ -17,8 +17,8 @@ use crate::text_render::{
     self, FONTS, LETTER_SPACING_MAX, LETTER_SPACING_MIN, TextStyle, defaults as d,
 };
 use crate::theme;
+use crate::ui::color_row::SWATCH_COLORS;
 use crate::ui::icons::Icon;
-use crate::ui::visual::SWATCHES;
 use crate::ui::widgets::{
     choice_pill, icon_button, panel_note, panel_row, section_with, slider_track_from, switch,
 };
@@ -152,9 +152,9 @@ impl Editor {
             .and_then(Value::as_str)
             .map(str::to_string);
         let id = clip.id.clone();
-        self.swatch_row(
+        self.color_row(
             key,
-            &SWATCHES,
+            &SWATCH_COLORS,
             chosen.as_deref(),
             false,
             move |ed, c, cx| {

@@ -247,8 +247,8 @@ pub fn fetch_named(names: &[String]) -> Result<Vec<EffectEntry>> {
     ))
 }
 
-/// Every enabled effect's row (the shader check test).
-#[cfg(test)]
+/// Every enabled effect's row (the shader check test, the AI agent's
+/// effect names).
 pub fn fetch_all_effects() -> Result<Vec<EffectEntry>> {
     get_rows(&format!(
         "select={COLUMNS}&enabled=eq.true&format=lte.{PACKAGE_FORMAT}&order=sort_order"

@@ -2,9 +2,11 @@
 //! through `Editor` methods so every change is one undoable step.
 
 pub mod adjust_panel;
+pub mod agent;
 pub mod audio_panel;
 pub mod browser;
 pub mod clip_tools;
+pub mod color_row;
 pub mod crop;
 pub mod dialogs;
 pub mod fx;

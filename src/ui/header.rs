@@ -127,6 +127,22 @@ impl Editor {
                     .justify_end()
                     .gap_2()
                     .child(
+                        chip("ai-agent")
+                            .when(self.agent.settings.open, |d| {
+                                d.bg(theme::button_hover())
+                                    .border_color(theme::text_tertiary())
+                            })
+                            .tooltip(tooltip("AI agent: edit by asking", None))
+                            .on_click(cx.listener(|ed, _, w, cx| ed.agent_toggle(w, cx)))
+                            .child(Icon::Sparkles.el(15., theme::text()))
+                            .child(
+                                div()
+                                    .text_size(px(theme::XS))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("AI agent"),
+                            ),
+                    )
+                    .child(
                         chip("shortcuts")
                             .tooltip(tooltip(
                                 "Keyboard shortcuts",

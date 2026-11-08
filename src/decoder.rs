@@ -31,6 +31,43 @@ pub struct DecodedFrame {
 pub fn init() {
     ff::init().expect("FFmpeg initializes");
     ff::util::log::set_level(ff::util::log::Level::Error);
+    // SAFETY: `log_filter` is stateless and safe to call from any thread.
+    unsafe { ff::ffi::av_log_set_callback(Some(log_filter)) };
+}
+
+/// What the H.264 / HEVC decoders log (at error level) when decoding
+/// restarts at a keyframe whose neighbours point back at pictures from
+/// before it (open GOPs, which phones and cameras write): the decoder
+/// drops the missing references and carries on. A seek hits this
+/// all the time; nothing is wrong with the file.
+const SEEK_NOISE: &[&[u8]] = &[
+    b"mmco: unref short failure",
+    b"mmco: unref long failure",
+    b"reference picture missing during reorder",
+    b"Missing reference picture",
+    b"co located POCs unavailable",
+    b"number of reference frames",
+    b"illegal short term buffer state",
+    b"Could not find ref with POC",
+    b"Error constructing the frame RPS",
+];
+
+/// FFmpeg's own logger, minus `SEEK_NOISE`.
+unsafe extern "C" fn log_filter(
+    avcl: *mut std::ffi::c_void,
+    level: std::ffi::c_int,
+    fmt: *const std::ffi::c_char,
+    vl: ff::ffi::va_list,
+) {
+    if !fmt.is_null() && level >= ff::ffi::AV_LOG_ERROR {
+        // SAFETY: FFmpeg passes a NUL-terminated format string.
+        let fmt = unsafe { std::ffi::CStr::from_ptr(fmt) }.to_bytes();
+        if SEEK_NOISE.iter().any(|n| fmt.starts_with(n)) {
+            return;
+        }
+    }
+    // SAFETY: forwarded untouched; `vl` hasn't been read.
+    unsafe { ff::ffi::av_log_default_callback(avcl, level, fmt, vl) }
 }
 
 /// Reads a file's duration and picture size for the media library.
@@ -129,6 +166,8 @@ struct Decoder {
     rotation: u32,
     max_width: u32,
     eof: bool,
+    /// Frames still allowed to be skipped as corrupt since the last seek.
+    skip_corrupt: u8,
 }
 
 impl Decoder {
@@ -164,6 +203,7 @@ impl Decoder {
             scaler: None,
             max_width,
             eof: false,
+            skip_corrupt: 0,
         })
     }
 
@@ -172,6 +212,9 @@ impl Decoder {
         self.input.seek(t, ..t)?;
         self.video.flush();
         self.eof = false;
+        // An open GOP's leading pictures decode against references from
+        // before the keyframe we landed on: concealed smears, not frames.
+        self.skip_corrupt = 8;
         Ok(())
     }
 
@@ -180,6 +223,13 @@ impl Decoder {
         let mut frame = ff::frame::Video::empty();
         loop {
             if self.video.receive_frame(&mut frame).is_ok() {
+                if self.skip_corrupt > 0 {
+                    if frame.is_corrupt() {
+                        self.skip_corrupt -= 1;
+                        continue;
+                    }
+                    self.skip_corrupt = 0;
+                }
                 let pts = frame.timestamp().or(frame.pts()).unwrap_or(0);
                 return Some((
                     (pts as f64 * self.time_base * SECOND as f64) as Micros,
@@ -334,6 +384,93 @@ pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<Decod
         height,
         bgra,
     })
+}
+
+/// Hard cuts in `path` between source times `from` and `to`: where the
+/// whole picture changes at once (a scene change inside one clip). The
+/// picture is sampled ~15 times a second at a tiny size; a cut is a jump
+/// in brightness well above the jumps around it. Blocking.
+pub fn scene_cuts(path: &str, from: Micros, to: Micros) -> anyhow::Result<Vec<Micros>> {
+    const STEP: Micros = 66_000;
+    const MIN_GAP: Micros = 600_000;
+    let mut dec = Decoder::open(path, 64)?;
+    if from > 0 {
+        dec.seek(from)?;
+    }
+    let mut prev: Option<Vec<f32>> = None;
+    let mut diffs: Vec<(Micros, f32)> = vec![];
+    let mut last: Option<Micros> = None;
+    while let Some((pts, frame)) = dec.next() {
+        if pts < from || last.is_some_and(|l| pts - l < STEP) {
+            continue;
+        }
+        if pts > to {
+            break;
+        }
+        last = Some(pts);
+        let (_, _, bgra) = dec.frame_bgra(&frame)?;
+        let luma: Vec<f32> = bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| (0.114 * p[0] as f32 + 0.587 * p[1] as f32 + 0.299 * p[2] as f32) / 255.)
+            .collect();
+        if let Some(p) = &prev
+            && p.len() == luma.len()
+            && !luma.is_empty()
+        {
+            let d =
+                p.iter().zip(&luma).map(|(a, b)| (a - b).abs()).sum::<f32>() / luma.len() as f32;
+            diffs.push((pts, d));
+        }
+        prev = Some(luma);
+    }
+    Ok(pick_cuts(&diffs, MIN_GAP))
+}
+
+/// The jumps that stand out: over an absolute floor and several times the
+/// typical change around them (camera moves change every frame a little).
+fn pick_cuts(diffs: &[(Micros, f32)], min_gap: Micros) -> Vec<Micros> {
+    let mut cuts: Vec<Micros> = vec![];
+    for (i, &(t, d)) in diffs.iter().enumerate() {
+        let lo = i.saturating_sub(8);
+        let hi = (i + 9).min(diffs.len());
+        let mut around: Vec<f32> = diffs[lo..hi]
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| lo + j != i)
+            .map(|(_, x)| x.1)
+            .collect();
+        around.sort_by(f32::total_cmp);
+        let typical = around.get(around.len() / 2).copied().unwrap_or(0.);
+        if d > 0.1 && d > typical * 4. + 0.02 && cuts.last().is_none_or(|&c| t - c >= min_gap) {
+            cuts.push(t);
+        }
+    }
+    cuts
+}
+
+#[cfg(test)]
+mod scene_tests {
+    /// REEL_SCENE_FILE=clip.mp4 cargo t scene_cuts_in_a_file -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn scene_cuts_in_a_file() {
+        super::init();
+        let path = std::env::var("REEL_SCENE_FILE").expect("REEL_SCENE_FILE");
+        let cuts = super::scene_cuts(&path, 0, 600_000_000).unwrap();
+        eprintln!("cuts: {cuts:?}");
+        assert!(!cuts.is_empty());
+    }
+
+    #[test]
+    fn picks_jumps_not_motion() {
+        let mut diffs: Vec<(i64, f32)> = (0..60).map(|i| (i * 66_000, 0.03)).collect();
+        diffs[20].1 = 0.4; // a cut
+        diffs[21].1 = 0.35; // its echo, too close
+        diffs[45].1 = 0.08; // a quick pan: not a cut
+        assert_eq!(super::pick_cuts(&diffs, 600_000), vec![20 * 66_000]);
+    }
 }
 
 // ---- filmstrip tiles ---------------------------------------------------------
