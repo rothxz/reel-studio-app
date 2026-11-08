@@ -97,6 +97,10 @@ flags=(
   --enable-static
   --disable-shared
   --extra-cflags="-MD -I$winprefix/include"
+  # The few C++ sources (the Windows screen-capture filter) take
+  # cxxflags, not cflags: without -MD they get MSVC's static /MT runtime
+  # and the app's link fails (RuntimeLibrary mismatch, libcpmt duplicates).
+  --extra-cxxflags="-MD"
   --extra-ldflags="-LIBPATH:$winprefix/lib"
   # Only the libraries; the app reads files itself.
   --disable-programs
