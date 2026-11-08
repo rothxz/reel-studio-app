@@ -79,6 +79,8 @@ pub struct Updater {
 struct Found {
     version: String,
     file: Asset,
+    /// The same file through GitHub's API (see `get_release_file`).
+    api_url: Option<String>,
 }
 
 /// One platform's download in `update.json`.
@@ -113,6 +115,9 @@ pub struct Release {
 pub struct ReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
+    /// The asset's API endpoint (bytes with `Accept: application/octet-stream`).
+    #[serde(default)]
+    pub url: String,
 }
 
 impl Updater {
@@ -317,8 +322,8 @@ pub fn platform_key() -> String {
     format!("{os}-{}", std::env::consts::ARCH)
 }
 
-/// The newest of our releases (by version), with its manifest's URL.
-pub fn newest_release(releases: &[Release]) -> Option<(String, String)> {
+/// The newest of our releases (by version), with its version and manifest.
+pub fn newest_release(releases: &[Release]) -> Option<(String, &Release, &ReleaseAsset)> {
     releases
         .iter()
         .filter(|r| !r.draft)
@@ -326,14 +331,52 @@ pub fn newest_release(releases: &[Release]) -> Option<(String, String)> {
             let version = r.tag_name.strip_prefix(TAG_PREFIX)?;
             let parsed = parse_version(version)?;
             let manifest = r.assets.iter().find(|a| a.name == MANIFEST)?;
-            Some((
-                parsed,
-                version.to_string(),
-                manifest.browser_download_url.clone(),
-            ))
+            Some((parsed, version.to_string(), r, manifest))
         })
         .max_by_key(|(parsed, ..)| *parsed)
-        .map(|(_, version, url)| (version, url))
+        .map(|(_, version, r, manifest)| (version, r, manifest))
+}
+
+/// The API endpoint of the release asset a manifest download URL names
+/// (matched by file name), if the release lists it.
+pub fn api_url_for(release: &Release, download_url: &str) -> Option<String> {
+    let name = download_url.rsplit('/').next()?;
+    release
+        .assets
+        .iter()
+        .find(|a| a.name == name && !a.url.is_empty())
+        .map(|a| a.url.clone())
+}
+
+/// GETs a release file: through GitHub's API asset endpoint first, then
+/// the public download link. The public `github.com/…/releases/download/`
+/// links can fail (504s) while the API keeps serving the same bytes.
+fn get_release_file(
+    agent: &ureq::Agent,
+    api_url: Option<&str>,
+    direct_url: &str,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    let user_agent = format!("ReelStudio/{VERSION}");
+    let api_err = match api_url {
+        Some(api) => match agent
+            .get(api)
+            .header("Accept", "application/octet-stream")
+            .header("User-Agent", &user_agent)
+            .call()
+        {
+            Ok(response) => return Ok(response),
+            Err(e) => Some(e),
+        },
+        None => None,
+    };
+    agent
+        .get(direct_url)
+        .header("User-Agent", &user_agent)
+        .call()
+        .map_err(|e| match api_err {
+            Some(api_err) => anyhow::anyhow!("{direct_url}: {e} (API: {api_err})"),
+            None => anyhow::anyhow!("{direct_url}: {e}"),
+        })
 }
 
 /// This machine's download from a manifest, if it is newer than
@@ -390,22 +433,29 @@ fn find_update() -> Result<Option<Found>> {
             .body_mut()
             .read_to_string()?,
     )?;
-    let Some((version, manifest_url)) = newest_release(&releases) else {
+    let Some((version, release, manifest_asset)) = newest_release(&releases) else {
         return Ok(None);
     };
     if parse_version(&version) <= parse_version(VERSION) {
         return Ok(None);
     }
     let manifest: Manifest = serde_json::from_str(
-        &agent
-            .get(&manifest_url)
-            .header("User-Agent", &format!("ReelStudio/{VERSION}"))
-            .call()?
-            .body_mut()
-            .read_to_string()?,
+        &get_release_file(
+            agent,
+            Some(manifest_asset.url.as_str()).filter(|u| !u.is_empty()),
+            &manifest_asset.browser_download_url,
+        )?
+        .body_mut()
+        .read_to_string()?,
     )?;
     let os = os_version();
-    Ok(pick(&manifest, &version, VERSION, os.as_deref())?.map(|file| Found { version, file }))
+    Ok(
+        pick(&manifest, &version, VERSION, os.as_deref())?.map(|file| Found {
+            api_url: api_url_for(release, &file.url),
+            version,
+            file,
+        }),
+    )
 }
 
 /// The macOS version (the manifest's minimum applies to macOS only).
@@ -442,10 +492,11 @@ fn fetch(found: &Found, progress: &dyn Fn(f32)) -> Result<PathBuf> {
         .unwrap_or("update.zip");
     let zip = dir.join(name);
 
-    let mut response = crate::assets::download_agent()
-        .get(&found.file.url)
-        .header("User-Agent", &format!("ReelStudio/{VERSION}"))
-        .call()?;
+    let mut response = get_release_file(
+        crate::assets::download_agent(),
+        found.api_url.as_deref(),
+        &found.file.url,
+    )?;
     let total = match found.file.size {
         0 => response
             .headers()
@@ -763,10 +814,18 @@ mod tests {
             tag_name: tag.into(),
             draft,
             assets: if manifest {
-                vec![ReleaseAsset {
-                    name: MANIFEST.into(),
-                    browser_download_url: format!("https://example.test/{tag}/{MANIFEST}"),
-                }]
+                vec![
+                    ReleaseAsset {
+                        name: MANIFEST.into(),
+                        browser_download_url: format!("https://example.test/{tag}/{MANIFEST}"),
+                        url: format!("https://api.example.test/{tag}/1"),
+                    },
+                    ReleaseAsset {
+                        name: "a.zip".into(),
+                        browser_download_url: format!("https://example.test/{tag}/a.zip"),
+                        url: format!("https://api.example.test/{tag}/2"),
+                    },
+                ]
             } else {
                 vec![]
             },
@@ -793,9 +852,20 @@ mod tests {
             release("native-v0.2.11", false, false),
             release("native-v0.2.10", false, true),
         ];
-        let (version, url) = newest_release(&releases).unwrap();
+        let (version, newest, manifest) = newest_release(&releases).unwrap();
         assert_eq!(version, "0.2.10");
-        assert!(url.ends_with("native-v0.2.10/update.json"));
+        assert!(
+            manifest
+                .browser_download_url
+                .ends_with("native-v0.2.10/update.json")
+        );
+        assert_eq!(manifest.url, "https://api.example.test/native-v0.2.10/1");
+        // The platform file's API link, matched by name.
+        assert_eq!(
+            api_url_for(newest, "https://example.test/native-v0.2.10/a.zip").as_deref(),
+            Some("https://api.example.test/native-v0.2.10/2")
+        );
+        assert!(api_url_for(newest, "https://example.test/x/b.zip").is_none());
         assert!(newest_release(&[release("v1.0.0", false, true)]).is_none());
     }
 
