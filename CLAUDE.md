@@ -72,7 +72,7 @@ src/pinch.rs       trackpad pinch → timeline zoom (AppKit magnify
 src/analytics.rs   anonymous usage events → PostHog (the phone app's
                    project and event names): batching thread, privacy
                    filter, events derived from each edit; release
-                   builds only, Settings switch
+                   builds only, Settings switch (docs/ANALYTICS.md)
 src/history.rs     undo / redo (document snapshots, coalesced per gesture)
 src/model.rs       Project document (serde): same JSON as the app; unknown fields
                    kept in `extra`; clip edits + `with_magnet`
