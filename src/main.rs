@@ -17,6 +17,7 @@ mod engine;
 mod export;
 mod gizmo;
 mod history;
+mod i18n;
 mod library;
 mod model;
 mod pinch;
@@ -44,13 +45,99 @@ use shortcuts::{Shortcut, find};
 /// the menu shows the same key as the Shortcuts dialog.
 fn item(id: Shortcut) -> MenuItem {
     MenuItem::Action {
-        name: find(id).label.into(),
+        name: i18n::t(find(id).label).into(),
         action: id.action(),
         os_action: None,
     }
 }
 
+/// The app menu (the macOS menu bar; the ☰ menu elsewhere), in the current
+/// language: built again when the language changes.
+pub fn set_app_menus(cx: &mut App) {
+    use Shortcut::*;
+    use i18n::t;
+    cx.set_menus(vec![
+        Menu {
+            name: t("Reel Studio").into(),
+            items: vec![
+                MenuItem::action(t("Settings…"), OpenSettings),
+                MenuItem::action(t("Check for Updates…"), CheckForUpdates),
+                MenuItem::separator(),
+                MenuItem::action(t("Quit Reel Studio"), Quit),
+            ],
+        },
+        Menu {
+            name: t("File").into(),
+            items: vec![
+                MenuItem::action(t("Import Media…"), ImportMedia),
+                MenuItem::separator(),
+                MenuItem::action(t("Open Project…"), OpenProject),
+                MenuItem::action(t("Save Project"), SaveProject),
+                MenuItem::action(t("Save Project As…"), SaveProjectAs),
+                MenuItem::separator(),
+                item(Export),
+            ],
+        },
+        Menu {
+            name: t("Edit").into(),
+            items: vec![
+                item(Undo),
+                item(Redo),
+                MenuItem::separator(),
+                item(CutClip),
+                item(CopyClip),
+                item(PasteClip),
+                item(Duplicate),
+                item(DeleteClip),
+                MenuItem::separator(),
+                item(SplitClip),
+                item(DeleteLeft),
+                item(DeleteRight),
+                item(Deactivate),
+                MenuItem::separator(),
+                item(Deselect),
+            ],
+        },
+        Menu {
+            name: t("View").into(),
+            items: vec![
+                item(ZoomIn),
+                item(ZoomOut),
+                item(ZoomFit),
+                MenuItem::separator(),
+                item(MainMagnet),
+                item(Snapping),
+                item(PreviewAxis),
+                MenuItem::separator(),
+                item(SelectTool),
+                item(SplitTool),
+                MenuItem::separator(),
+                item(Fullscreen),
+                item(ShowShortcuts),
+            ],
+        },
+        Menu {
+            name: t("Playback").into(),
+            items: vec![
+                item(PlayPause),
+                MenuItem::separator(),
+                item(PrevFrame),
+                item(NextFrame),
+                item(Back1s),
+                item(Forward1s),
+                item(PrevEdit),
+                item(NextEdit),
+                MenuItem::separator(),
+                item(GoStart),
+                item(GoEnd),
+            ],
+        },
+    ]);
+}
+
 fn main() {
+    // The UI language before anything shows a string (Settings → Language).
+    i18n::set_locale(i18n::resolve(prefs::Prefs::load().language.as_deref()));
     decoder::init();
     text_render::warm_up();
     let app = Application::new().with_assets(ui::icons::Assets);
@@ -79,84 +166,7 @@ fn main() {
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
-        use Shortcut::*;
-        cx.set_menus(vec![
-            Menu {
-                name: "Reel Studio".into(),
-                items: vec![
-                    MenuItem::action("Settings…", OpenSettings),
-                    MenuItem::action("Check for Updates…", CheckForUpdates),
-                    MenuItem::separator(),
-                    MenuItem::action("Quit Reel Studio", Quit),
-                ],
-            },
-            Menu {
-                name: "File".into(),
-                items: vec![
-                    MenuItem::action("Import Media…", ImportMedia),
-                    MenuItem::separator(),
-                    MenuItem::action("Open Project…", OpenProject),
-                    MenuItem::action("Save Project", SaveProject),
-                    MenuItem::action("Save Project As…", SaveProjectAs),
-                    MenuItem::separator(),
-                    item(Export),
-                ],
-            },
-            Menu {
-                name: "Edit".into(),
-                items: vec![
-                    item(Undo),
-                    item(Redo),
-                    MenuItem::separator(),
-                    item(CutClip),
-                    item(CopyClip),
-                    item(PasteClip),
-                    item(Duplicate),
-                    item(DeleteClip),
-                    MenuItem::separator(),
-                    item(SplitClip),
-                    item(DeleteLeft),
-                    item(DeleteRight),
-                    item(Deactivate),
-                    MenuItem::separator(),
-                    item(Deselect),
-                ],
-            },
-            Menu {
-                name: "View".into(),
-                items: vec![
-                    item(ZoomIn),
-                    item(ZoomOut),
-                    item(ZoomFit),
-                    MenuItem::separator(),
-                    item(MainMagnet),
-                    item(Snapping),
-                    item(PreviewAxis),
-                    MenuItem::separator(),
-                    item(SelectTool),
-                    item(SplitTool),
-                    MenuItem::separator(),
-                    item(Fullscreen),
-                    item(ShowShortcuts),
-                ],
-            },
-            Menu {
-                name: "Playback".into(),
-                items: vec![
-                    item(PlayPause),
-                    MenuItem::separator(),
-                    item(PrevFrame),
-                    item(NextFrame),
-                    item(Back1s),
-                    item(Forward1s),
-                    item(PrevEdit),
-                    item(NextEdit),
-                    MenuItem::separator(),
-                    item(GoStart),
-                    item(GoEnd),
-                ],
-            },
-        ]);
+        set_app_menus(cx);
 
         open_main_window(cx, true);
         // Off macOS an app without windows has nothing left to show

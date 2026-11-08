@@ -168,7 +168,7 @@ impl Render for DragChip {
             .border_color(theme::text_secondary())
             .opacity(0.9)
             .text_size(px(theme::XS))
-            .font_family(theme::FONT_BODY)
+            .font_family(theme::font_body())
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme::text())
             .child(self.name.clone())

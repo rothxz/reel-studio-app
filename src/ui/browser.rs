@@ -9,6 +9,7 @@
 use gpui::{Context, FontWeight, ObjectFit, div, img, prelude::*, px, rgba};
 
 use crate::editor::Editor;
+use crate::i18n::t;
 use crate::model::{MediaItem, Micros, SECOND};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -148,7 +149,7 @@ impl Editor {
                             .text_size(px(theme::XS))
                             .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
                             .whitespace_nowrap()
-                            .child(t.label),
+                            .child(crate::i18n::t(t.label)),
                     )
             }));
 
@@ -339,12 +340,12 @@ impl Editor {
                             .text_size(px(theme::XS))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::app_bg())
-                            .child("Import"),
+                            .child(t("Import")),
                     ),
             )
             .child(div().flex_1())
             .child(label_text(
-                format!("{count} item{}", if count == 1 { "" } else { "s" }),
+                crate::i18n::plural("desktop.itemCount", count, "{count} item", "{count} items"),
                 theme::text_tertiary(),
             ));
 
@@ -459,7 +460,9 @@ impl Editor {
                         }
                         None => d,
                     })
-                    .when(added, |d| d.child(badge("Added".into()).left(px(4.))))
+                    .when(added, |d| {
+                        d.child(badge(crate::i18n::t("Added").into()).left(px(4.)))
+                    })
                     .when(
                         item.duration > 0 && item.has_video || !item.has_video,
                         |d| {
@@ -511,7 +514,7 @@ fn not_yet(view: &str) -> impl IntoElement {
                 .text_size(px(theme::SM))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text_secondary())
-                .child(view.to_string()),
+                .child(crate::i18n::ts(view.to_string())),
         )
         .child(
             div()

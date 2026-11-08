@@ -233,7 +233,7 @@ impl Editor {
                                     .flex_none()
                                     .w(px(104.))
                                     .text_color(theme::text_tertiary())
-                                    .child(label),
+                                    .child(crate::i18n::ts(label)),
                             )
                             .child(
                                 div()
@@ -331,7 +331,7 @@ impl Editor {
                         ed.layers_panel = None;
                         cx.notify();
                     }))
-                    .child(tab.label)
+                    .child(crate::i18n::ts(tab.label))
             }));
 
         let sub_tabs = current_tab
@@ -467,7 +467,7 @@ impl Editor {
                     div()
                         .flex()
                         .gap_1()
-                        .font_family(theme::FONT_MONO)
+                        .font_family(theme::font_mono())
                         .text_size(px(theme::XS))
                         .child(
                             div()
@@ -493,7 +493,7 @@ fn not_yet(label: &str) -> impl IntoElement {
                 .text_size(px(theme::SM))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text_secondary())
-                .child(label.to_string()),
+                .child(crate::i18n::ts(label.to_string())),
         )
         .child(
             div()

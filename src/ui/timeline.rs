@@ -22,6 +22,7 @@ use gpui::{
 
 use crate::decoder::{self, Waveform};
 use crate::editor::{Drag, Editor, Tool, timecode};
+use crate::i18n::t;
 use crate::model::{BeatStrength, Clip, Micros, Project, SECOND, Side, Track, TrackType};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -1737,7 +1738,7 @@ impl Editor {
                             .text_size(px(theme::XXS))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text())
-                            .child("Cover"),
+                            .child(t("Cover")),
                     ),
             )
             .into_any_element()

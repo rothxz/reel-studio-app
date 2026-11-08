@@ -194,13 +194,25 @@ impl PopupItem {
         run: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
     ) -> Self {
         PopupItem {
-            label: label.into(),
+            label: crate::i18n::ts(label),
             checked: false,
             hint: None,
             disabled: false,
             destructive: false,
             separator: false,
             run: Rc::new(run),
+        }
+    }
+
+    /// A row whose label is shown as given, never translated (a language
+    /// named in its own language).
+    pub fn verbatim(
+        label: &'static str,
+        run: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
+    ) -> Self {
+        PopupItem {
+            label: label.into(),
+            ..PopupItem::new("", run)
         }
     }
 
@@ -784,7 +796,7 @@ impl Editor {
     pub fn toast(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.toast_token += 1;
         let token = self.toast_token;
-        self.toast = Some(message.into());
+        self.toast = Some(crate::i18n::ts(message));
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(TOAST_MS))
@@ -2692,7 +2704,7 @@ impl Render for Editor {
             .flex()
             .flex_col()
             .bg(theme::app_bg())
-            .font_family(theme::FONT_BODY)
+            .font_family(theme::font_body())
             .text_color(theme::text())
             .text_size(px(theme::MD))
             .when_some(resizing, |d, c| d.cursor(c));
@@ -2812,9 +2824,6 @@ impl Editor {
     fn render_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let viewport = window.viewport_size();
         let mut out = vec![];
-        if let Some(popup) = &self.popup {
-            out.push(crate::ui::dialogs::popup_menu(popup, viewport, cx).into_any_element());
-        }
         if self.shortcuts_open {
             out.push(crate::ui::dialogs::shortcuts_dialog(cx).into_any_element());
         }
@@ -2826,6 +2835,10 @@ impl Editor {
         }
         if self.export.is_some() {
             out.push(self.render_export(window, cx));
+        }
+        // Over the dialogs: a dialog's own dropdowns (Settings → Language).
+        if let Some(popup) = &self.popup {
+            out.push(crate::ui::dialogs::popup_menu(popup, viewport, cx).into_any_element());
         }
         if let Some(confirm) = &self.confirm {
             out.push(crate::ui::dialogs::confirm_dialog(confirm, cx).into_any_element());

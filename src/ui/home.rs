@@ -17,6 +17,7 @@ use gpui::{
 };
 
 use crate::editor::{Confirm, Editor, HEADER_HEIGHT, HomeTab, PopupItem};
+use crate::i18n::t;
 use crate::projects::{self, Summary};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -161,9 +162,11 @@ impl Editor {
     fn home_page(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_home = self.home_tab == HomeTab::Edit;
         let count = self.home_projects.len();
-        let drafts = format!(
-            "{count} DRAFT{} · LOCAL ONLY",
-            if count == 1 { "" } else { "S" }
+        let drafts = crate::i18n::plural(
+            "projects.draftsLabel",
+            count,
+            "{count} DRAFT · LOCAL ONLY",
+            "{count} DRAFTS · LOCAL ONLY",
         );
         let title: SharedString = if is_home {
             self.home_greeting.into()
@@ -203,7 +206,7 @@ impl Editor {
                                 .justify_center()
                                 .text_size(px(15.))
                                 .text_color(theme::text_faint())
-                                .child("No projects yet. Create your first edit."),
+                                .child(t("No projects yet. Create your first edit.")),
                         )
                     })
                     .children(rows),
@@ -232,7 +235,7 @@ impl Editor {
                         div()
                             .text_size(px(22.))
                             .font_weight(FontWeight::BOLD)
-                            .child(title),
+                            .child(crate::i18n::ts(title)),
                     )
                     .child(
                         div()
@@ -262,7 +265,7 @@ impl Editor {
         }
         let selecting = self.home_selection.as_ref();
         let title: SharedString = match selecting {
-            Some(s) => format!("{} selected", s.len()).into(),
+            Some(s) => crate::i18n::tf("{count} selected", &[("count", &s.len())]).into(),
             None => "Recent".into(),
         };
         let show_title = is_home || selecting.is_some();
@@ -281,7 +284,7 @@ impl Editor {
                             div()
                                 .text_size(px(18.))
                                 .font_weight(FontWeight::BOLD)
-                                .child(title),
+                                .child(crate::i18n::ts(title)),
                         )
                         .map(|d| match selecting {
                             Some(sel) => d.child(self.selection_actions(sel.len(), cx)),
@@ -297,7 +300,7 @@ impl Editor {
                                     .on_click(cx.listener(|ed, _, _, cx| {
                                         ed.set_home_tab(HomeTab::Projects, cx)
                                     }))
-                                    .child("See all")
+                                    .child(t("See all"))
                                     .child(Icon::ChevronForward.el(14., theme::text_secondary())),
                             ),
                             None => d,
@@ -322,7 +325,7 @@ impl Editor {
                         ed.home_selection = None;
                         cx.notify();
                     }))
-                    .child("Cancel"),
+                    .child(t("Cancel")),
             )
             .child(
                 div()
@@ -392,7 +395,7 @@ impl Editor {
                     .text_size(px(17.))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme::text())
-                    .child("Create New Project"),
+                    .child(crate::i18n::t("Create New Project")),
             )
     }
 
@@ -596,7 +599,7 @@ fn sidebar_row(
         })
         .on_click(click)
         .child(icon.el(20., color))
-        .child(label)
+        .child(crate::i18n::ts(label))
 }
 
 /// "Drop to start", shown only while files are dragged over the window
@@ -621,6 +624,6 @@ fn drop_overlay() -> impl IntoElement {
                 .relative()
                 .text_size(px(theme::LG))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child("Drop videos or photos to start a new video"),
+                .child(t("Drop videos or photos to start a new video")),
         )
 }

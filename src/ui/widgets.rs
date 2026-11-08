@@ -7,6 +7,7 @@ use gpui::{
     RenderOnce, SharedString, Stateful, Styled, Window, div, prelude::*, px,
 };
 
+use crate::i18n::ts;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -18,16 +19,16 @@ pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 /// Small uppercase mono metadata ("SAVED · LOCAL").
 pub fn label_text(s: impl Into<SharedString>, color: impl Into<Hsla>) -> Div {
     div()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::font_mono())
         .font_weight(FontWeight::MEDIUM)
         .text_size(px(theme::XS))
         .text_color(color.into())
-        .child(s.into().to_uppercase())
+        .child(ts(s).to_uppercase())
 }
 
 pub fn mono(s: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Div {
     div()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::font_mono())
         .text_size(px(size))
         .text_color(color.into())
         .child(s.into())
@@ -44,9 +45,9 @@ pub struct Tooltip {
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .font_family(theme::FONT_BODY)
+            .font_family(theme::font_body())
             .text_size(px(theme::XS))
-            .line_height(px(15.))
+            .line_height(theme::line_height(15., theme::XS))
             .px_2()
             .py_1()
             .rounded(px(5.))
@@ -68,7 +69,7 @@ pub fn tooltip(
     name: impl Into<SharedString>,
     hint: Option<String>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let name = name.into();
+    let name = ts(name);
     let hint: Option<SharedString> = hint.map(Into::into);
     move |_, cx| {
         let (name, hint) = (name.clone(), hint.clone());
@@ -102,7 +103,7 @@ pub fn icon_button(
         id: id.into(),
         icon,
         icon_size: 16.,
-        label: label.into(),
+        label: ts(label),
         hint: None,
         active: None,
         disabled: false,
@@ -223,7 +224,7 @@ pub fn pill_button(
                     .hover(|s| s.bg(theme::button_hover()))
             }
         })
-        .child(label.into())
+        .child(ts(label))
 }
 
 /// The thin vertical rule between toolbar groups.
@@ -267,7 +268,7 @@ pub fn panel_header(title: impl Into<SharedString>, height: f32) -> Div {
         .text_size(px(theme::SM))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme::text())
-        .child(title.into())
+        .child(ts(title))
 }
 
 // ---- inspector parts ----------------------------------------------------------------
@@ -295,7 +296,7 @@ pub fn section(title: impl Into<SharedString>, first: bool) -> Div {
                 .text_size(px(theme::XS))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
-                .child(title.into()),
+                .child(ts(title)),
         )
 }
 
@@ -308,7 +309,7 @@ pub fn panel_row(label: impl Into<SharedString>) -> Div {
             .truncate()
             .text_size(px(theme::XS))
             .text_color(theme::text_secondary())
-            .child(label.into()),
+            .child(ts(label)),
     )
 }
 
@@ -326,7 +327,7 @@ pub fn value_box(s: impl Into<SharedString>) -> Div {
         .bg(theme::chip_bg())
         .border_1()
         .border_color(theme::chip_border())
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::font_mono())
         .text_size(px(theme::XS))
         .text_color(theme::text())
         .child(s.into())
@@ -357,7 +358,7 @@ pub fn segment_tabs(tabs: Vec<(SharedString, bool, OnClick)>) -> Div {
                 .when(on, |d| d.bg(theme::button_bg()).text_color(theme::text()))
                 .when(!on, |d| d.text_color(theme::text_secondary()))
                 .on_click(f)
-                .child(label)
+                .child(ts(label))
         }))
 }
 
@@ -450,7 +451,7 @@ pub fn section_with(
                         .text_size(px(theme::XS))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::text())
-                        .child(title.into()),
+                        .child(ts(title)),
                 )
                 .children(right),
         )
@@ -470,7 +471,7 @@ pub fn switch_row(label: impl Into<SharedString>, switch: impl IntoElement) -> D
                 .truncate()
                 .text_size(px(theme::XS))
                 .text_color(theme::text_secondary())
-                .child(label.into()),
+                .child(ts(label)),
         )
         .child(switch)
 }
@@ -503,9 +504,9 @@ pub fn panel_note(text: impl Into<SharedString>) -> Div {
         .mt(px(2.))
         .mb_1()
         .text_size(px(theme::XS))
-        .line_height(px(16.))
+        .line_height(theme::line_height(16., theme::XS))
         .text_color(theme::text_tertiary())
-        .child(text.into())
+        .child(ts(text))
 }
 
 /// A small pill (a choice among a few: Color / Image / Blur); `on` is
@@ -540,7 +541,7 @@ pub fn choice_pill(
                 d.bg(theme::button_bg()).text_color(theme::text_disabled())
             }
         })
-        .child(label.into())
+        .child(ts(label))
 }
 
 /// A square picker tile: `content` centred, a white ring when chosen, the

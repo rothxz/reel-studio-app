@@ -152,16 +152,18 @@ pub fn relative_time(iso_ts: &str) -> String {
     relative_time_at(iso_ts, unix_secs())
 }
 
+use crate::i18n::tk;
+
 fn relative_time_at(iso_ts: &str, now: i64) -> String {
     let Some(then) = parse_iso(iso_ts) else {
         return String::new();
     };
     let diff = (now - then).max(0);
     match diff {
-        d if d < 60 => "just now".into(),
-        d if d < 3600 => format!("{}m ago", d / 60),
-        d if d < 86_400 => format!("{}h ago", d / 3600),
-        d if d < 7 * 86_400 => format!("{}d ago", d / 86_400),
+        d if d < 60 => tk("time.justNow", "just now", &[]),
+        d if d < 3600 => tk("time.minutesAgo", "{count}m ago", &[("count", &(d / 60))]),
+        d if d < 86_400 => tk("time.hoursAgo", "{count}h ago", &[("count", &(d / 3600))]),
+        d if d < 7 * 86_400 => tk("time.daysAgo", "{count}d ago", &[("count", &(d / 86_400))]),
         _ => iso_ts.get(0..10).unwrap_or_default().to_string(),
     }
 }

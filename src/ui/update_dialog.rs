@@ -177,13 +177,13 @@ impl Editor {
                                         div()
                                             .text_size(px(theme::LG))
                                             .font_weight(FontWeight::BOLD)
-                                            .child(title),
+                                            .child(crate::i18n::ts(title)),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(theme::SM))
                                             .text_color(theme::text_secondary())
-                                            .child(sub),
+                                            .child(crate::i18n::ts(sub)),
                                     ),
                             ),
                     )
@@ -287,7 +287,7 @@ fn notes_box(notes: Option<SharedString>) -> impl IntoElement {
         .gap(px(8.))
         .child(
             div()
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::font_mono())
                 .text_size(px(theme::XS))
                 .text_color(theme::text_faint())
                 .child("WHAT'S NEW"),
@@ -328,7 +328,7 @@ fn note_line(line: &str) -> Option<AnyElement> {
                 .pt(px(4.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
-                .child(heading)
+                .child(crate::i18n::ts(heading))
                 .into_any_element(),
         );
     }
@@ -378,7 +378,7 @@ fn progress(percent: f32) -> impl IntoElement {
             div()
                 .w(px(36.))
                 .text_right()
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::font_mono())
                 .text_size(px(theme::XS))
                 .text_color(theme::text_secondary())
                 .child(format!("{}%", percent.round() as u32)),

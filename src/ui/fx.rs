@@ -29,6 +29,7 @@ use crate::catalog::{
 };
 use crate::editor::{Editor, SliderFn};
 use crate::effects::stack::LiveParam;
+use crate::i18n::t;
 use crate::model::{EffectInstance, TrackType};
 use crate::theme;
 use crate::ui::browser::{EFFECTS_TAB, FILTER_TAB};
@@ -613,7 +614,7 @@ impl Editor {
                                 .text_size(px(theme::XS))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme::text())
-                                .child("Adjust"),
+                                .child(crate::i18n::t("Adjust")),
                         ),
                 )
             })
@@ -723,7 +724,7 @@ impl Editor {
                             .text_size(px(theme::SM))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text())
-                            .child("Adjust"),
+                            .child(t("Adjust")),
                     )
                     .child(
                         icon_button("fx-adjust-close", Icon::Close, "Close")
@@ -772,7 +773,7 @@ impl Editor {
                     }))
             })
             .child(Icon::Reload.el(13., theme::text_secondary()))
-            .child("Reset");
+            .child(t("Reset"));
 
         div()
             .px(px(14.))
@@ -786,7 +787,7 @@ impl Editor {
                         .py_2()
                         .text_size(px(theme::XS))
                         .text_color(theme::text_tertiary())
-                        .child("This effect has nothing to adjust."),
+                        .child(t("This effect has nothing to adjust.")),
                 )
             })
             .children(a.specs.iter().map(|spec| {
@@ -859,7 +860,7 @@ fn browser_view(label: &str, grid: AnyElement, adjust: Option<AnyElement>) -> An
                 .text_size(px(theme::SM))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
-                .child(label.to_string()),
+                .child(crate::i18n::ts(label.to_string())),
         )
         .child(grid)
         .children(adjust)
@@ -881,7 +882,7 @@ fn message(text: &str, action: Option<AnyElement>) -> Div {
                 .text_size(px(theme::XS))
                 .text_color(theme::text_tertiary())
                 .text_center()
-                .child(text.to_string()),
+                .child(crate::i18n::ts(text.to_string())),
         )
         .children(action)
 }
@@ -896,5 +897,5 @@ fn footnote(text: &str) -> Div {
         .gap_2()
         .text_size(px(theme::XS))
         .text_color(theme::text_tertiary())
-        .child(text.to_string())
+        .child(crate::i18n::ts(text.to_string()))
 }

@@ -1,14 +1,16 @@
 //! Settings (app menu → Settings…, ⌘, or the home screen's gear): the old
-//! desktop Settings dialog. So far its Updates group (check, download,
-//! restart), the usage-data switch (Privacy) and the version; language, appearance and the editing
-//! defaults are still to come (docs/PARITY.md). Found and downloaded
+//! desktop Settings dialog. So far the language (General), its Updates
+//! group (check, download, restart), the usage-data switch (Privacy) and
+//! the version; appearance and the editing defaults are still to come
+//! (docs/PARITY.md). Found and downloaded
 //! versions also show in the update dialog (ui/update_dialog.rs).
 
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, Pixels, SharedString, Size, div, prelude::*, px,
 };
 
-use crate::editor::Editor;
+use crate::editor::{Editor, PopupItem};
+use crate::i18n::{self, t, tf};
 use crate::theme;
 use crate::ui::icons::Icon;
 use crate::ui::widgets::{pill_button, switch};
@@ -81,7 +83,7 @@ impl Editor {
                                     .flex_1()
                                     .text_size(px(theme::LG))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Settings"),
+                                    .child(t("Settings")),
                             )
                             .child(
                                 div()
@@ -105,6 +107,7 @@ impl Editor {
                             .overflow_y_scroll()
                             .p(px(20.))
                             .pb(px(4.))
+                            .child(group("GENERAL", vec![self.language_row(cx)]))
                             .child(group("UPDATES", vec![self.update_row(cx)]))
                             .child(group("PRIVACY", vec![self.usage_data_row(cx)]))
                             .child(group(
@@ -125,6 +128,74 @@ impl Editor {
             .into_any_element()
     }
 
+    /// Settings → Language: "Same as device" or one of the languages, each
+    /// named in its own language. The whole UI and the app menu switch at once.
+    fn language_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.prefs.language.clone();
+        let label = match current.as_deref().and_then(i18n::Locale::from_code) {
+            Some(locale) => locale.native_name(),
+            None => t("Same as device"),
+        };
+        row(Icon::Language, "Language", None)
+            .child(
+                div()
+                    .id("settings-language")
+                    .w(px(190.))
+                    .h(px(32.))
+                    .px(px(12.))
+                    .rounded(px(8.))
+                    .bg(theme::button_bg())
+                    .border_1()
+                    .border_color(theme::chip_border())
+                    .hover(|s| s.bg(theme::button_hover()))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(theme::SM))
+                            .child(label),
+                    )
+                    .child(Icon::ChevronDown.el(14., theme::text_secondary()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ed, e: &gpui::MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let choice = |code: Option<&'static str>| {
+                                move |ed: &mut Editor,
+                                      _: &mut gpui::Window,
+                                      cx: &mut Context<Editor>| {
+                                    ed.set_language(code, cx)
+                                }
+                            };
+                            let mut items = vec![
+                                PopupItem::new(t("Same as device"), choice(None))
+                                    .checked(current.is_none()),
+                            ];
+                            items.extend(i18n::available().into_iter().map(|l| {
+                                PopupItem::verbatim(l.native_name(), choice(Some(l.code())))
+                                    .checked(current.as_deref() == Some(l.code()))
+                            }));
+                            ed.open_popup(e.position, items, cx);
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Switches the UI language (None = the system's) and remembers it.
+    pub fn set_language(&mut self, code: Option<&str>, cx: &mut Context<Self>) {
+        self.prefs.language = code.map(str::to_string);
+        self.prefs.save();
+        i18n::set_locale(i18n::resolve(code));
+        crate::set_app_menus(cx);
+        cx.refresh_windows();
+    }
+
     /// Anonymous usage events (src/analytics.rs): on by default, off stops
     /// them at once and drops what's still waiting.
     fn usage_data_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -133,9 +204,11 @@ impl Editor {
             Icon::Speedometer,
             "Share anonymous usage data",
             Some(
-                "Which features get used, to make Reel Studio better. Never your \
-                 media, projects or text."
-                    .into(),
+                t(
+                    "Which features get used, to make Reel Studio better. Never your \
+                   media, projects or text.",
+                )
+                .into(),
             ),
         )
         .child(
@@ -154,16 +227,26 @@ impl Editor {
         let u = self.updater.read(cx);
         let version = u.version.clone().unwrap_or_default();
         let sub: SharedString = match &u.status {
-            Status::Checking => "Checking for updates…".into(),
-            Status::Available => format!("Version {version} is available").into(),
-            Status::UpToDate => "You're on the latest version".into(),
-            Status::Downloading(p) => format!("Downloading… {}%", p.round() as u32).into(),
-            Status::Downloaded | Status::Installed => {
-                format!("Version {version} is downloaded").into()
+            Status::Checking => t("Checking for updates…").into(),
+            Status::Available => {
+                tf("Version {version} is available", &[("version", &version)]).into()
             }
-            Status::Failed => "Couldn't update. Check your connection and try again.".into(),
-            Status::Unsupported => "Updates are only available in the installed app".into(),
-            Status::Idle => format!("You're on version {}", updater::VERSION).into(),
+            Status::UpToDate => t("You're on the latest version").into(),
+            Status::Downloading(p) => tf(
+                "Downloading… {percent}%",
+                &[("percent", &(p.round() as u32))],
+            )
+            .into(),
+            Status::Downloaded | Status::Installed => {
+                tf("Version {version} is downloaded", &[("version", &version)]).into()
+            }
+            Status::Failed => t("Couldn't update. Check your connection and try again.").into(),
+            Status::Unsupported => t("Updates are only available in the installed app").into(),
+            Status::Idle => tf(
+                "You're on version {version}",
+                &[("version", &updater::VERSION)],
+            )
+            .into(),
         };
         let action: Option<(&str, bool, fn(&mut Editor, &mut Context<Editor>))> = match &u.status {
             Status::Available => Some(("Download", true, |ed, cx| {
@@ -197,7 +280,7 @@ impl Editor {
             })
             .when_some(action, |d, (label, primary, run)| {
                 d.child(
-                    pill_button("settings-update", label, primary)
+                    pill_button("settings-update", t(label), primary)
                         .rounded_full()
                         .on_click(cx.listener(move |ed, _, _, cx| {
                             run(ed, cx);
@@ -220,10 +303,10 @@ fn group(title: &'static str, rows: Vec<AnyElement>) -> gpui::Div {
         .child(
             div()
                 .px(px(2.))
-                .font_family(theme::FONT_MONO)
+                .font_family(theme::font_mono())
                 .text_size(px(theme::SM))
                 .text_color(theme::text_faint())
-                .child(title),
+                .child(t(title)),
         )
         .child(
             div()
@@ -259,7 +342,7 @@ fn row(icon: Icon, label: &'static str, sub: Option<SharedString>) -> gpui::Div 
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().text_size(px(theme::MD)).child(label))
+                .child(div().text_size(px(theme::MD)).child(t(label)))
                 .when_some(sub, |d, sub| {
                     d.child(
                         div()
