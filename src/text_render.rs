@@ -411,7 +411,7 @@ fn path_mask(path: &tiny_skia::Path, stroke: f32, w: u32, h: u32) -> Vec<f32> {
 }
 
 /// A rounded rectangle (`roundness` 0–1 of the shorter half side).
-fn rounded(r: Rect, roundness: f32) -> Option<tiny_skia::Path> {
+pub(crate) fn rounded(r: Rect, roundness: f32) -> Option<tiny_skia::Path> {
     let rad = (r.width().min(r.height()) / 2. * roundness.clamp(0., 1.)).max(0.);
     if rad <= 0.01 {
         return Some(PathBuilder::from_rect(r));

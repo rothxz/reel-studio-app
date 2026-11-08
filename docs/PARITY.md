@@ -17,12 +17,17 @@ isn't listed.
 - [~] Native window, transparent title bar with traffic lights; double-click
   on the header zooms. *Dragging the window by the header's empty parts
   isn't wired (GPUI's mac backend has no `start_window_move`).*
-- [~] Projects home: greeting + drafts count, New video (file dialog or
-  drop: a new project with those files), Recent list (thumbnail, length,
-  "4m ago"), click opens, right click → Open / Delete with confirm; the
+- [~] Projects home: left sidebar (Edit, Projects, Settings dialog);
+  Edit = greeting + drafts count, the New video card (a blank project in
+  the editor, written only once edited; files dropped on the window start
+  one with them, with a dashed "drop to start" overlay) pinned over the
+  list and shrinking to a slim bar as it scrolls, Recent (newest 5, "See
+  all" → Projects) over a Videos pill with the count; Projects = every
+  draft. Rows: thumbnail, length, "4m ago"; click opens, right click →
+  Open / Select / Delete; select mode ticks drafts for one Delete. The
   header's ✕ saves and returns to it. *No rename yet (needs a text field);
-  no multi-select delete; the phone-only cards (photo, other tools) are
-  left out on purpose, as the old desktop build does.*
+  the phone-only cards (photo, scans, other tools) are left out on
+  purpose, as the old desktop build does.*
 - [x] Project persistence: one JSON per project in the data folder's
   `projects/`, written atomically; saved 1.5 s after the last edit, on ✕,
   on window close and on quit; header SAVED · LOCAL / UNSAVED CHANGES.
@@ -47,8 +52,8 @@ isn't listed.
 - [~] Project name ▾. *Shown; a click shows Details in the inspector.
   Rename needs a text field.*
 - [x] BETA badge
-- [ ] AI agent toggle (opens the agent panel in the inspector slot). *Hidden,
-  as in the old app when the agent isn't available.*
+- [x] AI agent toggle (opens the agent panel in the inspector slot),
+  remembered across launches
 - [x] Shortcuts button → Shortcuts dialog (⌘/), with tooltip + key
 - [x] Export resolution ▾ (720p / 1080p / 4K, remembered)
 - [~] Export button (⌘E). *Says export isn't available yet: no desktop
@@ -325,8 +330,64 @@ isn't listed.
   bound in `Editor && !TextInput`, so typing never triggers them. *Number
   fields don't take typing yet; no select widget (the Font menu is a
   popup).*
-- [ ] AI agent panel (providers, key vault, chat, tools, `look`), shown in
-  the inspector slot
+- [~] AI agent panel in the inspector slot (`agent/`, `ui/agent.rs`):
+  - [x] Providers: Ollama, LM Studio, llama.cpp, custom OpenAI-compatible;
+    Claude, ChatGPT, Gemini, OpenRouter, Grok, DeepSeek, Mistral with the
+    user's key (macOS keychain; never shown again). Model + vision model
+    pickers, each server's picks remembered.
+  - [x] Chat: requests, each tool run (label, arguments, result or
+    progress), answers, errors; Stop, New chat, Undo AI edits (n); every
+    tool call is one undo step.
+  - [x] The old app's tools (timeline edits, text, transform, keyframes,
+    filters, adjust, effects, blend, ratio, media, freeze, extract audio,
+    lanes, `look`), plus what goes beyond it: `add_title` (animated titles:
+    pop, slide up, typewriter, word by word, lower third, headline, neon,
+    countdown), `animate` (zoom / pan / pop / slide / shake / spin as
+    keyframes), `find_sounds` / `add_sound` / `sound_design` (real
+    recordings from the app's library + Openverse CC0 / CC BY, placed by
+    onset / peak / tail on cuts, transitions, titles, text, stickers,
+    effects, typewriter runs and scene changes found in the picture).
+  - [x] Small local models: macro tools in their core set, worked
+    examples, forgiving arguments ("5s", "1:05", fuzzy names that list
+    the closest), text tool calls, a loop stop, a nudge when an answer
+    claims an edit no tool made. `agent/eval.rs` (ignored) scores a real
+    model: Qwen3-VL 4B instruct (the default pick: it also does `look`,
+    so no second model evicts it) and qwen3 4B instruct both pass 9/9.
+  - [x] Skills (`agent/skills.rs`): a job's steps, worked examples and
+    extra tools, loaded per request so a small model reaches the cloud-only
+    tools one job at a time (keyframes, overlay / picture-in-picture, clip
+    tools, lanes, stickers, captions, scene, colour grade, highlight reel).
+    Routed by the request's words (no extra model call), or loaded by the
+    model with `use_skill` (a skill called by its own name counts too).
+    Instructions ride in the user message and tools are appended after the
+    fixed ones, so the warmed-up prefix stays cached. The user's own skills:
+    Markdown files in `<data>/skills/` (name, description, triggers, tools
+    header + steps), "Open skills folder" in the setup. `eval_skills`:
+    Qwen3-VL 4B 7/8 (unrouted discovery still misses one); core eval 9/9.
+  - [x] Local speed: the model is warmed up (loaded, instructions + tools
+    read and cached by the server) when the panel opens, at launch with
+    it open, after Connect / a model pick and on the first keystroke, and
+    kept loaded 30 min. A cold first request went from ~20 s to ~3.5 s on
+    an M1 Pro (`eval_warm_up`; `REEL_AGENT_LOG=1` prints each call's
+    load / prompt / reply times).
+  - [x] Making a video from one prompt (`make_video`, `agent/tools/produce.rs`):
+    the model writes the script, and per scene the narration is spoken
+    (`agent/voice.rs`: OpenAI or Gemini speech with the user's key, else
+    the system voice), measured, and a motion-graphic scene drawn exactly
+    that long (`agent/graphics.rs` → H.264 via `agent/movie.rs`: animated
+    backdrop, growing bar chart, counter, line chart, comparison, steps;
+    7 palettes); its key point as an animated title, captions timed to
+    the voice's pauses (`agent/captions.rs`), library stickers popping in,
+    a music bed under it (looped, faded, low under the voice) and sound
+    design on the cuts and titles. Tagged, so asking again replaces it.
+  - [x] The parts on their own: `add_voiceover` (+ captions), `add_captions`,
+    `add_music`, `add_sticker`, `add_scene`. Drawn scenes join the media
+    library.
+  - [ ] Auto captions for the user's own speech (speech to text,
+    on-device); generated pictures / footage (stock or image models);
+    scene transitions (the native editor has none yet: cuts get whooshes);
+    showing `look`'s frames in the chat; credits for CC BY sounds at
+    export; the chat field focused when the panel opens at launch.
 
 ## Timeline toolbar
 

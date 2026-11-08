@@ -242,6 +242,14 @@ pub enum Screen {
     Editor,
 }
 
+/// The home sidebar's pages: Edit (start a video, the newest drafts) and
+/// Projects (every draft).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeTab {
+    Edit,
+    Projects,
+}
+
 /// A yes / no question over the window (a destructive action).
 pub struct Confirm {
     pub title: SharedString,
@@ -277,6 +285,11 @@ pub struct Editor {
     /// The projects list (home screen).
     pub(crate) home_projects: Vec<projects::Summary>,
     pub(crate) home_greeting: &'static str,
+    pub(crate) home_tab: HomeTab,
+    /// The drafts picked for deletion, while the list is in select mode.
+    pub(crate) home_selection: Option<std::collections::BTreeSet<String>>,
+    /// The list's scroll (the New video card shrinks as it scrolls).
+    pub(crate) home_scroll: gpui::ScrollHandle,
     /// A question over everything (delete a project?).
     pub(crate) confirm: Option<Confirm>,
     autosave_token: u64,
@@ -333,6 +346,9 @@ pub struct Editor {
     remote_pictures: PictureServer,
     /// The browser's Audio / Text / Sticker views.
     pub(crate) lib: LibraryUi,
+    /// The AI agent (its panel takes the inspector's place) and its fields.
+    pub(crate) agent: crate::agent::Agent,
+    pub(crate) agent_ui: crate::ui::agent::AgentUi,
     /// Sound out (None: no output device).
     pub(crate) audio: Option<Audio>,
     /// When the sound was last (re)started with the picture.
@@ -475,7 +491,7 @@ impl Editor {
         if let Err(e) = engine.load(&project) {
             eprintln!("engine refused the empty project: {e}");
         }
-        Editor {
+        let mut editor = Editor {
             project,
             engine,
             media: vec![],
@@ -491,6 +507,9 @@ impl Editor {
             screen: Screen::Home,
             home_projects: vec![],
             home_greeting: "",
+            home_tab: HomeTab::Edit,
+            home_selection: None,
+            home_scroll: gpui::ScrollHandle::new(),
             confirm: None,
             autosave_token: 0,
             fullscreen: false,
@@ -523,6 +542,8 @@ impl Editor {
             picture_server: PictureServer::new(assets::EFFECT_PREVIEWS, picture_tx.clone()),
             remote_pictures: PictureServer::new(assets::REMOTE, picture_tx),
             lib: LibraryUi::new(cx),
+            agent: crate::agent::Agent::new(),
+            agent_ui: crate::ui::agent::AgentUi::new(cx),
             audio: Audio::new(),
             audio_synced_at: Instant::now(),
             text_field,
@@ -569,7 +590,12 @@ impl Editor {
             fps_window: (Instant::now(), 0),
             preview_fps: 0.,
             focus,
+        };
+        // The agent panel opens with the app: load its model meanwhile.
+        if editor.agent.settings.open {
+            editor.agent_warm_up(cx);
         }
+        editor
     }
 
     // ---- small helpers ----------------------------------------------------
@@ -926,6 +952,8 @@ impl Editor {
         }
         self.project = project;
         self.history.clear();
+        // A different project: the agent's chat and ids start over.
+        self.agent.reset();
         self.dirty = false;
         self.selected.clear();
         self.inspector_entry = None;
@@ -973,6 +1001,16 @@ impl Editor {
             self.add_to_library(item, cx);
         }
         self.zoom_to_fit(cx);
+    }
+
+    /// New video: an empty project straight into the editor. It's written
+    /// only once something is edited, so backing out leaves no empty draft.
+    pub fn new_blank_project(&mut self, cx: &mut Context<Self>) {
+        let mut project = Project::empty();
+        project.created_at = projects::now_iso();
+        project.updated_at = project.created_at.clone();
+        self.home_selection = None;
+        self.start_session(project, cx);
     }
 
     pub fn open_saved_project(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -1077,13 +1115,27 @@ impl Editor {
         cx.notify();
     }
 
-    pub fn delete_saved_project(&mut self, id: &str, cx: &mut Context<Self>) {
-        match projects::delete(id) {
-            Ok(()) => {
-                self.refresh_home(cx);
-                self.toast("Deleted 1 project", cx);
+    /// Deletes these drafts from the projects folder (ends select mode).
+    pub fn delete_saved_projects(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        let mut deleted = 0;
+        let mut failed = None;
+        for id in ids {
+            match projects::delete(id) {
+                Ok(()) => deleted += 1,
+                Err(e) => failed = Some(e),
             }
-            Err(e) => self.toast(format!("Couldn't delete it: {e}"), cx),
+        }
+        self.home_selection = None;
+        self.refresh_home(cx);
+        match failed {
+            Some(e) => self.toast(format!("Couldn't delete it: {e}"), cx),
+            None => self.toast(
+                format!(
+                    "Deleted {deleted} project{}",
+                    if deleted == 1 { "" } else { "s" }
+                ),
+                cx,
+            ),
         }
     }
 
@@ -2683,12 +2735,13 @@ impl Render for Editor {
                         .child(self.splitter(Panel::Browser, sizes.browser, cx))
                         .child(self.render_player(cx))
                         .child(self.splitter(Panel::Inspector, sizes.inspector, cx))
-                        .child(
-                            panel_box()
-                                .w(px(sizes.inspector))
-                                .bg(theme::sheet())
-                                .child(self.render_inspector(cx)),
-                        ),
+                        .child(panel_box().w(px(sizes.inspector)).bg(theme::sheet()).child(
+                            if self.agent.settings.open {
+                                self.render_agent(cx)
+                            } else {
+                                self.render_inspector(cx).into_any_element()
+                            },
+                        )),
                 )
                 .child(self.splitter(Panel::Timeline, sizes.timeline, cx))
                 .child(
