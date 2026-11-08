@@ -13,7 +13,7 @@
 # must not shadow MSVC's link.exe.
 #
 # zlib (PNG stills, some MOV headers) is built first, from source, as a
-# static z.lib beside FFmpeg's libraries. Everything uses the DLL C
+# static zlib.lib (+ a z.lib copy) beside FFmpeg's libraries. Everything uses the DLL C
 # runtime (/MD), like Rust's MSVC target.
 #
 # Then build the app with FFMPEG_DIR=<prefix>.
@@ -70,8 +70,11 @@ tar -xf "$work/zlib.tar.gz" -C "$work"
   cl -nologo -c -O2 -MD -W0 \
     adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c gzwrite.c \
     infback.c inffast.c inflate.c inftrees.c trees.c uncompr.c zutil.c
-  # FFmpeg's MSVC toolchain turns -lz into z.lib.
-  lib -nologo -out:"$winprefix/lib/z.lib" ./*.obj
+  # FFmpeg's configure (MSVC toolchain) turns -lz into zlib.lib, but
+  # writes a plain -lz into its .pc files, which build.rs passes on to
+  # rustc as z.lib: install it under both names.
+  lib -nologo -out:"$winprefix/lib/zlib.lib" ./*.obj
+  cp "$prefix/lib/zlib.lib" "$prefix/lib/z.lib"
   cp zlib.h zconf.h "$prefix/include/"
 )
 
