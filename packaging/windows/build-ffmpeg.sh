@@ -75,7 +75,12 @@ tar -xf "$work/zlib.tar.gz" -C "$work"
   # rustc as z.lib: install it under both names.
   lib -nologo -out:"$winprefix/lib/zlib.lib" ./*.obj
   cp "$prefix/lib/zlib.lib" "$prefix/lib/z.lib"
-  cp zlib.h zconf.h "$prefix/include/"
+  cp zlib.h "$prefix/include/"
+  # zconf.h includes <unistd.h> when HAVE_UNISTD_H is merely defined, and
+  # FFmpeg's config.h defines it as 0 on MSVC (which has no unistd.h):
+  # pin the test off, as zlib's own configure pins it for its platform.
+  sed 's/^#ifdef HAVE_UNISTD_H /#if 0 /' zconf.h > "$prefix/include/zconf.h"
+  grep -q '^#if 0    /\* may be set to #if 1 by ./configure \*/' "$prefix/include/zconf.h"
 )
 
 # ---- FFmpeg -----------------------------------------------------------------
