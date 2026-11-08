@@ -1167,7 +1167,12 @@ impl Icon {
                     })
                 };
                 let mut pts: Vec<(f32, f32)> = arc(0.5, 0.5, 0.36, 300., 60.).collect();
-                pts.extend(arc(0.74, 0.5, 0.318, 100.9, 259.1).skip(1));
+                // The inner circle (centre 0.74, 0.5) passes through the
+                // outer arc's lower tip, and by symmetry its upper one.
+                let (tx, ty) = pts[pts.len() - 1];
+                let (dx, dy) = (tx - 0.74, ty - 0.5);
+                let tip = dy.atan2(dx).to_degrees();
+                pts.extend(arc(0.74, 0.5, dx.hypot(dy), tip, 360. - tip).skip(1));
                 s(poly(&pts, true));
             }
             Icon::Home => {
