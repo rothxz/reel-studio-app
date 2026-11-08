@@ -113,6 +113,11 @@ flags=(
   --disable-autodetect
   --enable-w32threads
   --enable-mediafoundation
+  # mfenc.c uses the D3D11 types (its hardware-frame path) whatever the
+  # configuration, but only includes their header when D3D11VA is on, and
+  # configure doesn't list it as a dependency: without it, autodetect off,
+  # h264_mf doesn't compile. Part of the Windows SDK, loaded at run time.
+  --enable-d3d11va
   --enable-zlib
 )
 if ! command -v nasm > /dev/null; then
