@@ -26,14 +26,19 @@ NAME="Reel Studio"
 ID=reel-studio
 # appimagetool, pinned: the release and each build's SHA-256.
 TOOL_VERSION=1.9.1
+# TOOL_ASSET: the same file's release asset id, the API's download route
+# for when github.com's release-download redirect fails for one file (it
+# 504'd for the aarch64 build, Nov 2026, while the asset itself was fine).
 case "$arch" in
   x64)
     tool_arch=x86_64
     TOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+    TOOL_ASSET=324406736
     ;;
   arm64)
     tool_arch=aarch64
     TOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+    TOOL_ASSET=324406707
     ;;
   *) echo "arch must be x64 or arm64" >&2; exit 1 ;;
 esac
@@ -91,8 +96,12 @@ chmod 755 "$app/AppRun"
 
 # ---- AppImage -----------------------------------------------------------------
 tool="$work/appimagetool"
-curl -fsSL --retry 5 --retry-all-errors -o "$tool" \
-  "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-$tool_arch.AppImage"
+if ! curl -fsSL --retry 3 --retry-all-errors -o "$tool" \
+  "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-$tool_arch.AppImage"; then
+  echo "release download failed; fetching the same asset through the API" >&2
+  curl -fsSL --retry 5 --retry-all-errors -H 'Accept: application/octet-stream' -o "$tool" \
+    "https://api.github.com/repos/AppImage/appimagetool/releases/assets/$TOOL_ASSET"
+fi
 echo "$TOOL_SHA256  $tool" | sha256sum -c -
 chmod 755 "$tool"
 image="$out/Reel-Studio-$version-linux-$arch.AppImage"
