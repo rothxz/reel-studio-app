@@ -27,6 +27,10 @@ pub struct Prefs {
     /// Settings → Language: a language code (src/i18n.rs), or None for
     /// "Same as device".
     pub language: Option<String>,
+    /// Captions › Style: the look new captions take (src/caption_styles.rs).
+    pub caption_style: String,
+    /// Captions › Auto captions: the spoken language picked last.
+    pub caption_language: String,
 }
 
 impl Default for Prefs {
@@ -43,6 +47,8 @@ impl Default for Prefs {
             export_dir: None,
             share_usage_data: true,
             language: None,
+            caption_style: crate::caption_styles::DEFAULT.into(),
+            caption_language: "en".into(),
         }
     }
 }

@@ -125,6 +125,7 @@ impl Gpu for Renderer {
             Program::Compose => msl::compose(),
             Program::Filter(body) => msl::filter(body),
             Program::Effect(kind, body) => msl::effect(kind, body),
+            Program::Reveal(body) => msl::reveal(body),
         };
         if let Some(p) = self.programs.get(&source) {
             return p.clone();

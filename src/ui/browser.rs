@@ -67,6 +67,8 @@ pub const BROWSER_TABS: &[BrowserTab] = &[
 ];
 
 pub const EFFECTS_TAB: usize = 4;
+pub const TRANSITIONS_TAB: usize = 5;
+pub const CAPTIONS_TAB: usize = 6;
 pub const FILTER_TAB: usize = 7;
 
 /// Views whose categories open under their row in the side nav (some
@@ -75,7 +77,13 @@ fn nested_view(tab: usize, view: usize) -> bool {
     use crate::ui::library::{AUDIO_TAB, STICKER_TAB};
     matches!(
         (tab, view),
-        (EFFECTS_TAB, 0) | (FILTER_TAB, 0) | (AUDIO_TAB, 0) | (AUDIO_TAB, 1) | (STICKER_TAB, 0)
+        (EFFECTS_TAB, 0)
+            | (FILTER_TAB, 0)
+            | (AUDIO_TAB, 0)
+            | (AUDIO_TAB, 1)
+            | (STICKER_TAB, 0)
+            | (TRANSITIONS_TAB, 0)
+            | (CAPTIONS_TAB, 1)
     )
 }
 
@@ -276,6 +284,9 @@ impl Editor {
             (STICKER_TAB, 1) => self.render_sticker_view(StickerKind::Gifs, cx),
             (EFFECTS_TAB, 0) => self.render_effects_view(cx),
             (FILTER_TAB, 0) => self.render_filters_view(cx),
+            (TRANSITIONS_TAB, 0) => self.render_transitions_view(cx),
+            (CAPTIONS_TAB, 0) => self.render_auto_captions_view(cx),
+            (CAPTIONS_TAB, 1) => self.render_caption_styles_view(cx),
             _ => not_yet(tab.views[view_ix]).into_any_element(),
         };
 

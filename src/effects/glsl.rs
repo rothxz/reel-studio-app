@@ -109,6 +109,7 @@ vec2 fx_rot(vec2 p, float a) {
     return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+float fx_A(vec2 uv) { return fx_read0(clamp(uv, 0.0, 1.0)).a; }
 vec3 fx_S(vec2 uv) {
     return fx_straight(fx_read0(clamp(uv, 0.0, 1.0))).rgb;
 }
@@ -241,6 +242,7 @@ pub fn translate(body: &str, sample: bool) -> String {
             "MOD" if call => out.push_str("mod"),
             "ATAN2" if call => out.push_str("atan"),
             "S" if call && sample => out.push_str("fx_S"),
+            "A" if call && sample => out.push_str("fx_A"),
             _ => out.push_str(&word),
         }
     }
@@ -309,6 +311,26 @@ void main() {{
     {combine}
     rgb = clamp(rgb, 0.0, 1.0);
     fx_out = vec4(rgb * under.a, under.a);
+}}
+",
+        translate(body, true)
+    )
+}
+
+/// A transition's reveal of the incoming picture: the body returns its
+/// premultiplied colour at `uv` (`S(` its straight colour, `A(` its
+/// alpha), `pr` 0–1 through the window, `dur` the window in seconds.
+pub fn reveal(body: &str) -> String {
+    format!(
+        "{COMMON}{FX_UNIFORMS}{EFFECT_HELPERS}
+vec4 an_body(vec2 uv, float time, float ar, float pr, float dur) {{
+{}
+}}
+
+void main() {{
+    vec4 c = an_body(fx_uv, fx_u.time, fx_u.ar, fx_u.pr, fx_u.dur);
+    float a = clamp(c.a, 0.0, 1.0);
+    fx_out = vec4(min(max(c.rgb, vec3(0.0)), vec3(a)), a);
 }}
 ",
         translate(body, true)

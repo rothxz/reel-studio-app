@@ -78,7 +78,7 @@ isn't listed.
   (Music / Sound / Voiceover, Add text / Text template, …); a view with
   categories (Video effects, Filter, Music, Sound, Stickers) folds them under
   its row in the side nav (chevron); a search hides the category highlight.
-  *Transitions, Captions, Voiceover and Text template still say they're
+  *Voiceover and Text template still say they're
   not in the native editor yet.*
 - [x] Media: Import button, item count, tile grid sized to the panel
   (min 104 px, 10 px gaps). Import / drop puts files in the library, not
@@ -137,8 +137,47 @@ isn't listed.
   hover (a handful of animations kept). Square tiles sized to the panel
   (≥ 92 px), white ring + Adjust on the picked one, ⊕ on hover, plain
   swatch until the picture arrives.
-- [ ] Transitions
-- [ ] Captions: Auto generate, Upload file (.srt/.vtt/.ass), Caption styles
+- [x] Transitions (`transitions.rs`, `ui/transitions.rs`): the picker aims
+  at the main lane's cut nearest the playhead ("Applies to the cut at …");
+  categories (Trending, Basic, Slide, Zoom, Spin, Light, Glitch, Mask, 3D)
+  folded under the view in the side nav; None first on Trending, the
+  picked tile ticked (again = off). A pick stores `outTransition` on the
+  outgoing clip, overlaps the two clips by its length (later main clips
+  move left), and replays the cut. DURATION slider (0.1 s up to half of
+  either clip, one undo step per drag) and Apply to all. Posed presets
+  (Mix, Black Fade, Pull, Zoom, Flip, Slide, Cover, Spin, Rotate, Swing:
+  written here, same ids) move both clips; the shader reveals (the clip
+  In reveals in Light / Glitch / Mask / 3D) come from the app checkout at
+  build time, their packages downloaded on first use, tile animations
+  from the asset host. Unknown stored types play as Mix. *No search box
+  yet; posed tiles show an icon, not a live preview.*
+- [~] Captions (`captions.rs`, `caption_styles.rs`, `speech.rs`,
+  `ui/captions.rs`): Auto captions (speech language, Style field opening
+  the Style view, what's captioned: selected clips with sound, else every
+  video clip; Generate; progress / Cancel in place while it runs, tabs
+  can change) on this computer with whisper.cpp's `whisper-cli` (PATH or
+  Homebrew, `REEL_WHISPER` overrides) and a multilingual model downloaded
+  once to `<data>/models/`. Khmer runs its own model (the community
+  Khmer fine-tune of Whisper Base, 60 MB, pinned, credited "sengtha /
+  iAny" in the Khmer note): its speech found by loudness, cut into
+  ≤ 6 s pieces at quiet points, beam search, an empty piece split and
+  retried, syllables cut between segments joined, lines broken only
+  between syllables. Every language drops a looping transcript ("ng ng
+  ng…"). Upload file (.srt / .vtt / .ass, kept at the
+  file's times, replacing overlapped captions, cut at the video's end).
+  Style: All / Monoline / Multiline, our own looks; a pick restyles every
+  caption (one undo step) and is remembered for the next ones. *Not yet:
+  whisper bundled with the app (users without `whisper-cli` get a toast
+  saying how to install it), Accurate / Fast quality, caption pages
+  (one clip per line-sized segment instead).*
+- [x] Edit captions (a caption selected → inspector Edit captions,
+  `ui/caption_edit.rs`): every caption with its mm:ss, the one under the
+  playhead lit, the selected one in the text field; Merge up / Merge
+  down, Split at the text cursor (time by the words' share, snapped to a
+  Khmer syllable), Delete, Find & replace (any case, match count,
+  Replace all). Each one undo step. The timeline's Split on a caption
+  cuts its words too (at the nearest word / syllable, never under
+  0.3 s a side).
 - [~] Filters: the categories (All, Featured, Portrait, Landscape, Food,
   Film, Cinematic, Retro, Night, Style, B&W, Classic) and looks compiled
   in at build time from the app checkout (never committed), tiles from
@@ -204,7 +243,11 @@ isn't listed.
   - Stickers (`stickers.rs`): the GIF / WebP downloaded, every frame decoded
     with its delay (≤ 150 frames, ≤ 480 px), premultiplied, looping over
     the clip; fitted in 40 % of the canvas's short side at zoom 100 %.
-  *Not yet: drawings, transitions, Adjust, cutout, pattern backgrounds,
+  Transitions: each clip's pose inside a transition window (opacity,
+  move by its own size, scale, turn, stretch) on its placement, and a
+  reveal shader pass on the incoming clip; the incoming clip draws over
+  the outgoing one. Shared by the player and export (`effects::stack`).
+  *Not yet: drawings, Adjust, cutout, pattern backgrounds,
   crop straighten, text animations / templates.*
 - [~] Audio playback in sync (`audio.rs`): a cpal output fed from a ring
   the mixer thread keeps ~120 ms ahead; every audible video / audio clip
@@ -319,8 +362,9 @@ isn't listed.
     angle) each switched at its title; Spacing (letter, line); Curve.
     Visual › Basic as on pictures. *Not yet: the "Aa" presets row,
     Templates, Fonts, Effects, Bubbles, Animation; custom colours.*
-  - [ ] Caption: Text (Basic, Fonts, Effects, Bubbles) · Captions (edit
-    list) · Animation
+  - [~] Caption: Text (Basic, Fonts, Effects, Bubbles) · Edit captions
+    (the list, see Captions) · Animation. *Only Basic and Edit captions
+    are built.*
   - [~] Audio (and a video's Audio tab): Volume › Volume — slider with
     100 % at its middle (to 1000 %), read-out, mute, reset (setting a
     level unmutes) — and Fade in / Fade out (0.1 s steps, each side at most
@@ -485,7 +529,8 @@ isn't listed.
   the playhead and the other diamonds; one undo step; a diamond already
   there gives way). *No Graphs badge, no tracked-path diamonds yet.*
 - [x] Transition seams: boxes meet mid-overlap; a button between main
-  clips (opens the browser's Transitions tab, which isn't ported yet)
+  clips (moves the playhead to that cut and opens the browser's
+  Transitions tab)
 - [x] Drag clips: press-drag moves (selects it); the old slot stays as a
   grey box, the clip follows see-through; snapping to 00:00 and clip edges
   (either edge of a moved clip) with a guide line; Esc cancels
@@ -548,8 +593,9 @@ isn't listed.
 - [x] Crop (`crop` box + `rotation`), freeze frame, extract audio
   (`extractedNumber`), replace media, layer order (`ReorderLayers`:
   places reshuffled, ties pulled apart) — `clip_edits.rs`, tested.
-- [ ] Keyframes, transforms, masks, adjust, transitions, drawings,
-  captions, speed curves, reverse (baked copy)
+- [~] Keyframes, transforms, masks, adjust, transitions, drawings,
+  captions, speed curves, reverse (baked copy). *Transitions and
+  captions export (same compositor as the player).*
 - [ ] Media relink for projects from the web app
 
 ## Export
@@ -616,9 +662,8 @@ items, tooltips and the dialog.
 3. Inspector panels on the real document fields: Adjust; Text's
    Templates / Fonts / Effects / Bubbles / Animation; Audio's Beats and
    Duration.
-4. Browser: Transitions (picker + the compositor's transition passes),
-   Captions (upload .srt/.vtt, caption styles; auto captions need a
-   speech model), Voiceover, Text templates.
+4. Browser: Voiceover, Text templates; Transitions search; bundle
+   whisper.cpp for auto captions (no Homebrew), Edit captions.
 5. Export leftovers (see Export): H.264 on Linux, custom bitrate.
 
 ## Platform
