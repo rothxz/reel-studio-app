@@ -36,8 +36,13 @@ fn main() {
         .warnings(false);
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         // M_PI and friends (glibc and Apple's libc define them anyway), and
-        // the sources' UTF-8 comments read as UTF-8 whatever the code page.
-        build.define("_USE_MATH_DEFINES", None).flag("/utf-8");
+        // the sources' UTF-8 comments read as UTF-8 whatever the code page,
+        // and the standard lambda rules: a capture-less lambda may read a
+        // local constexpr (C3493 under MSVC's legacy C++17 lambda parser).
+        build
+            .define("_USE_MATH_DEFINES", None)
+            .flag("/utf-8")
+            .flag("/Zc:lambda");
     }
     for entry in std::fs::read_dir(dir.join("src")).expect("REEL_ENGINE_DIR/src") {
         let path = entry.unwrap().path();
