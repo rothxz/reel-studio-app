@@ -322,6 +322,45 @@ mod imp {
 
 pub use imp::{Engine, adjust_color_matrix, filter_color_matrix};
 
+/// A clip's property at clip-local `local`: its keyframes as the engine
+/// eases them, else the clip's own value.
+pub fn clip_property_at(
+    engine: &Engine,
+    clip: &crate::model::Clip,
+    id: &str,
+    local: Micros,
+) -> Option<f64> {
+    let own = clip.static_property(id);
+    if clip.is_animated() {
+        engine.clip_property(&clip.id, id, local).or(own)
+    } else {
+        own
+    }
+}
+
+/// The pictures among `active` (videos and photos on picture lanes, text,
+/// stickers), back to front by stack order: the clip's own, else its
+/// lane's (a text / sticker lane can sit under an overlay video).
+pub fn picture_layers(project: &Project, mut active: Vec<ActiveLayer>) -> Vec<ActiveLayer> {
+    let order = |clip_id: &str| {
+        project.find_clip(clip_id).map_or(0., |(t, c)| {
+            c.extra
+                .get("stackOrder")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(t.order)
+        })
+    };
+    active.sort_by(|a, b| order(&a.clip_id).total_cmp(&order(&b.clip_id)));
+    active.retain(|l| match l.kind {
+        LayerKind::Video | LayerKind::Image | LayerKind::Sticker => {
+            (l.is_visual || l.kind == LayerKind::Sticker) && !l.source.is_empty()
+        }
+        LayerKind::Text => true,
+        _ => false,
+    });
+    active
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

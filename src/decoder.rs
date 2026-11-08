@@ -6,7 +6,7 @@
 //! forward a little (playback) decodes on from where it is; anything else
 //! seeks to the keyframe before the target and decodes up to it.
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 use ff::format::Pixel;
@@ -309,6 +309,81 @@ fn rotate(w: u32, h: u32, src: Vec<u8>, degrees: u32) -> (u32, u32, Vec<u8>) {
     (ow as u32, oh as u32, dst)
 }
 
+/// One file's frames on demand, in the caller's thread: the frame showing
+/// at a source time. Moving forward a little decodes on from where it is;
+/// anything else seeks to the keyframe before the target and decodes up
+/// to it. Asking for the frame already shown hands it back again.
+pub struct FrameReader {
+    dec: Decoder,
+    source: String,
+    key: String,
+    /// The frame shown last, and the one decoded just after it (one past
+    /// the target is read to know the target's frame has ended).
+    shown: Option<Arc<DecodedFrame>>,
+    lookahead: Option<(Micros, ff::frame::Video)>,
+}
+
+impl FrameReader {
+    /// `max_width` caps the decoded width (aspect kept); `key` names the
+    /// frames it hands out.
+    pub fn open(source: &str, key: &str, max_width: u32) -> anyhow::Result<Self> {
+        Ok(FrameReader {
+            dec: Decoder::open(source, max_width)?,
+            source: source.to_string(),
+            key: key.to_string(),
+            shown: None,
+            lookahead: None,
+        })
+    }
+
+    /// The frame showing at `target`; None when the file has none there
+    /// (empty, or unreadable from that point).
+    pub fn frame_at(&mut self, target: Micros) -> anyhow::Result<Option<Arc<DecodedFrame>>> {
+        let dec = &mut self.dec;
+        let shown = self.shown.as_ref().map(|f| f.pts);
+        if let Some(f) = &self.shown
+            && target >= f.pts
+            && target < f.pts + dec.frame_dur
+            && self.lookahead.as_ref().is_none_or(|(p, _)| target < *p)
+        {
+            return Ok(Some(f.clone())); // still the frame on screen
+        }
+        let close_ahead = shown.is_some_and(|s| target >= s && target - s < 2 * SECOND);
+        if !close_ahead {
+            dec.seek(target)?;
+            self.lookahead = None;
+        }
+        // Walk forward to the last frame starting at or before the target.
+        let mut best = self.lookahead.take();
+        while let Some((pts, frame)) = dec.next() {
+            if pts > target + dec.frame_dur / 2 {
+                if best.is_none() {
+                    best = Some((pts, frame)); // target before the first frame
+                } else {
+                    self.lookahead = Some((pts, frame));
+                }
+                break;
+            }
+            best = Some((pts, frame));
+        }
+        let Some((pts, frame)) = best else {
+            // Past the last frame: it stays.
+            return Ok(self.shown.clone());
+        };
+        let (width, height, bgra) = dec.frame_bgra(&frame)?;
+        let f = Arc::new(DecodedFrame {
+            source: self.source.clone(),
+            key: self.key.clone(),
+            pts,
+            width,
+            height,
+            bgra,
+        });
+        self.shown = Some(f.clone());
+        Ok(Some(f))
+    }
+}
+
 fn serve(
     source: &str,
     key: &str,
@@ -316,53 +391,28 @@ fn serve(
     rx: mpsc::Receiver<Micros>,
     out: async_channel::Sender<DecodedFrame>,
 ) -> anyhow::Result<()> {
-    let mut dec = Decoder::open(source, max_width)?;
-    // The frame on screen and the one decoded just after it (we read one
-    // past the target to know the target's frame has ended).
-    let mut shown: Option<Micros> = None;
-    let mut lookahead: Option<(Micros, ff::frame::Video)> = None;
-
+    let mut reader = FrameReader::open(source, key, max_width)?;
+    let mut sent: Option<Arc<DecodedFrame>> = None;
     while let Ok(mut target) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
             target = newer;
         }
-        let close_ahead = shown.is_some_and(|s| target >= s && target - s < 2 * SECOND);
-        if shown.is_some_and(|s| target >= s && target < s + dec.frame_dur)
-            && lookahead.as_ref().is_none_or(|(p, _)| target < *p)
-        {
+        let Some(frame) = reader.frame_at(target)? else {
+            continue;
+        };
+        if sent.as_ref().is_some_and(|s| Arc::ptr_eq(s, &frame)) {
             continue; // still the frame on screen
         }
-        if !close_ahead {
-            dec.seek(target)?;
-            lookahead = None;
-        }
-        // Walk forward to the last frame starting at or before the target.
-        let mut best = lookahead.take();
-        while let Some((pts, frame)) = dec.next() {
-            if pts > target + dec.frame_dur / 2 {
-                if best.is_none() {
-                    best = Some((pts, frame)); // target before the first frame
-                } else {
-                    lookahead = Some((pts, frame));
-                }
-                break;
-            }
-            best = Some((pts, frame));
-        }
-        let Some((pts, frame)) = best else { continue };
-        let (width, height, bgra) = dec.frame_bgra(&frame)?;
-        shown = Some(pts);
-        if out
-            .send_blocking(DecodedFrame {
-                source: source.to_string(),
-                key: key.to_string(),
-                pts,
-                width,
-                height,
-                bgra,
-            })
-            .is_err()
-        {
+        sent = Some(frame.clone());
+        let f = DecodedFrame {
+            source: frame.source.clone(),
+            key: frame.key.clone(),
+            pts: frame.pts,
+            width: frame.width,
+            height: frame.height,
+            bgra: frame.bgra.clone(),
+        };
+        if out.send_blocking(f).is_err() {
             break; // editor closed
         }
     }

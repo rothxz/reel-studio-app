@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds the FFmpeg the released Linux app links: static libraries, LGPL
-# only (no GPL / nonfree parts), decoding only; the same configuration as
-# packaging/macos/build-ffmpeg.sh. The AppImage then needs no FFmpeg on
-# the user's system (only zlib and bzip2, which every distribution has).
+# only (no GPL / nonfree parts), decoding plus export's encoders; much the
+# same configuration as packaging/macos/build-ffmpeg.sh. The AppImage then
+# needs no FFmpeg on the user's system (only zlib and bzip2, which every
+# distribution has).
 #
 #   packaging/linux/build-ffmpeg.sh <prefix>
 #
@@ -42,8 +43,12 @@ flags=(
   --disable-doc
   --disable-network
   --disable-devices
+  # Export: AAC and MPEG-4 in an MP4. (No LGPL H.264 encoder ships with
+  # FFmpeg itself; one needs libopenh264, see docs/PARITY.md, Export.)
   --disable-encoders
+  --enable-encoder=aac,mpeg4
   --disable-muxers
+  --enable-muxer=mp4
   # Nothing found on the build machine by accident (a distro's x264, SDL,
   # VA-API…): only what is listed here.
   --disable-autodetect

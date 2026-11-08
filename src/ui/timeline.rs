@@ -1954,7 +1954,7 @@ mod tests {
             .unwrap(),
         );
         let text = p.tracks.len() - 1;
-        let mut cap = |id: &str, start: i64| {
+        let cap = |id: &str, start: i64| {
             let mut c = clip(id, start, 2);
             c.extra.insert("caption".into(), serde_json::json!({}));
             c

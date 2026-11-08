@@ -11,7 +11,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cosmic-text = "0.14"
 cpal = "0.18.2"
 ffmpeg-next = "9"
-gpui = "0.2.2"
+# gpui's defaults minus `windows-manifest`: build.rs embeds our own manifest
+# (a superset of gpui's), and two RT_MANIFEST #1 resources fail the link
+# (CVT1100 duplicate resource).
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"] }
 image = "0.25"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

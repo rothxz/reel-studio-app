@@ -29,7 +29,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::decoder::DecodedFrame;
 use stack::Stack;
 
-fn image(f: &DecodedFrame) -> draw::Image<'_> {
+pub fn image(f: &DecodedFrame) -> draw::Image<'_> {
     draw::Image {
         width: f.width,
         height: f.height,
@@ -38,8 +38,9 @@ fn image(f: &DecodedFrame) -> draw::Image<'_> {
 }
 
 /// The GPU renderer of this platform: Metal on macOS (wgpu there with the
-/// `wgpu-effects` feature and `REEL_GPU=wgpu`), wgpu elsewhere.
-enum Renderer {
+/// `wgpu-effects` feature and `REEL_GPU=wgpu`), wgpu elsewhere. The
+/// preview has one on its render thread; an export makes its own.
+pub enum Renderer {
     #[cfg(target_os = "macos")]
     Metal(metal::Renderer),
     #[cfg(any(not(target_os = "macos"), feature = "wgpu-effects"))]
@@ -47,7 +48,8 @@ enum Renderer {
 }
 
 impl Renderer {
-    fn new() -> Option<Self> {
+    /// None without a GPU.
+    pub fn new() -> Option<Self> {
         #[cfg(all(target_os = "macos", feature = "wgpu-effects"))]
         if std::env::var("REEL_GPU").is_ok_and(|v| v == "wgpu") {
             return portable::Renderer::new().map(Renderer::Portable);
@@ -58,7 +60,9 @@ impl Renderer {
         return portable::Renderer::new().map(Renderer::Portable);
     }
 
-    fn render(
+    /// The pictures (one per `stack.layers`) through the stack: (width,
+    /// height, BGRA).
+    pub fn render(
         &mut self,
         frames: &[draw::Image],
         backdrop: Option<draw::Image>,

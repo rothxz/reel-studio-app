@@ -53,8 +53,6 @@ actions!(
 const PREVIEW_MAX_WIDTH: u32 = 1280;
 /// Filmstrip tiles are decoded this wide (a 44 px tile at 2×, some slack).
 const TILE_MAX_WIDTH: u32 = 128;
-/// A sticker at scale 1 fits in this share of the canvas's short side.
-const STICKER_FRACTION: f32 = 0.4;
 
 // Layout (old editor's desktop layout).
 pub const HEADER_HEIGHT: f32 = 40.;
@@ -291,6 +289,12 @@ pub struct Editor {
     pub(crate) home_scroll: gpui::ScrollHandle,
     /// A question over everything (delete a project?).
     pub(crate) confirm: Option<Confirm>,
+    /// The export screen, while it's up.
+    pub(crate) export: Option<crate::ui::export::ExportView>,
+    /// Counts exports (the screen drops updates of one it replaced).
+    pub(crate) export_seq: u64,
+    /// The export's frame rate (None: the project's own, snapped).
+    pub(crate) export_fps: Option<u32>,
     autosave_token: u64,
 
     pub(crate) fullscreen: bool,
@@ -510,6 +514,9 @@ impl Editor {
             home_selection: None,
             home_scroll: gpui::ScrollHandle::new(),
             confirm: None,
+            export: None,
+            export_seq: 0,
+            export_fps: None,
             autosave_token: 0,
             fullscreen: false,
             shortcuts_open: false,
@@ -1231,6 +1238,13 @@ impl Editor {
             }
             return;
         }
+        // The export screen takes nothing but Esc (close it).
+        if self.export.is_some() {
+            if id == Shortcut::Deselect {
+                self.close_export(cx);
+            }
+            return;
+        }
         if self.restart_prompt_open(cx) {
             if id == Shortcut::Deselect {
                 self.update_later(cx);
@@ -1373,11 +1387,6 @@ impl Editor {
             }
         }
         let _ = window;
-    }
-
-    pub fn export(&mut self, cx: &mut Context<Self>) {
-        // The engine has no desktop encoder yet (docs/PARITY.md, Export).
-        self.toast("Export isn't available in this build yet", cx);
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
@@ -1816,29 +1825,10 @@ impl Editor {
     /// don't fight over one decoder), text drawn from its look, a sticker's
     /// frame (loaded first: until then it's left out).
     pub(crate) fn request_preview(&mut self) {
-        let mut active = self.engine.active_layers(self.preview_time());
-        // Back to front by stack order: the clip's own, else its lane's
-        // (a text / sticker lane can sit under an overlay video).
-        let project = &self.project;
-        let order = |clip_id: &str| {
-            project.find_clip(clip_id).map_or(0., |(t, c)| {
-                c.extra
-                    .get("stackOrder")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(t.order)
-            })
-        };
-        active.sort_by(|a, b| order(&a.clip_id).total_cmp(&order(&b.clip_id)));
-        let layers: Vec<_> = active
-            .into_iter()
-            .filter(|l| match l.kind {
-                LayerKind::Video | LayerKind::Image | LayerKind::Sticker => {
-                    (l.is_visual || l.kind == LayerKind::Sticker) && !l.source.is_empty()
-                }
-                LayerKind::Text => true,
-                _ => false,
-            })
-            .collect();
+        let layers = engine::picture_layers(
+            &self.project,
+            self.engine.active_layers(self.preview_time()),
+        );
         let mut wanted = Vec::with_capacity(layers.len());
         for layer in layers {
             match layer.kind {
@@ -1959,15 +1949,13 @@ impl Editor {
         }
         let zoom = self
             .property_at(clip, "transform.scale", offset)
-            .unwrap_or(1.)
-            .clamp(0.05, 20.) as f32;
-        let raster_zoom = 2f32.powf((zoom.log2() * 4.).round() / 4.).clamp(0.25, 6.);
+            .unwrap_or(1.) as f32;
         let canvas = (
             self.project.canvas.width.max(1),
             self.project.canvas.height.max(1),
         );
         let fx_scale = self.fx_canvas_px().0 as f32 / canvas.0 as f32;
-        let raster_px = fx_scale * raster_zoom;
+        let raster_px = text_render::raster_px(zoom, fx_scale);
         let px_per_unit = text_render::unit_px(canvas.0, canvas.1) * raster_px;
         let (frame, content) = self.text_rasters.get_or_draw(&style, canvas, px_per_unit)?;
         Some((format!("text:{clip_id}"), frame, raster_px, content))
@@ -1982,30 +1970,12 @@ impl Editor {
         c: &Clip,
         f: &DecodedFrame,
     ) -> Option<[f32; 2]> {
-        let (cw, ch) = (
-            self.project.canvas.width.max(1) as f32,
-            self.project.canvas.height.max(1) as f32,
-        );
-        match w.kind {
-            // Its picture's own size (drawn `raster_px` per canvas px).
-            LayerKind::Text => Some([
-                f.width as f32 / w.raster_px / cw,
-                f.height as f32 / w.raster_px / ch,
-            ]),
-            // Fitted in 40 % of the canvas's short side.
-            LayerKind::Sticker => {
-                let sw = c.extra.get("sourceWidth").and_then(|v| v.as_f64());
-                let sh = c.extra.get("sourceHeight").and_then(|v| v.as_f64());
-                let (sw, sh) = match (sw, sh) {
-                    (Some(a), Some(b)) if a > 0. && b > 0. => (a as f32, b as f32),
-                    _ => (f.width as f32, f.height as f32),
-                };
-                let side = cw.min(ch) * STICKER_FRACTION;
-                let fit = (side / sw).min(side / sh);
-                Some([sw * fit / cw, sh * fit / ch])
-            }
-            _ => None,
-        }
+        fx_stack::natural_size(
+            c,
+            (f.width, f.height),
+            w.raster_px,
+            (self.project.canvas.width, self.project.canvas.height),
+        )
     }
 
     /// The pictures the player shows now (back to front) with their last
@@ -2753,7 +2723,7 @@ impl Render for Editor {
                         .child(timeline),
                 );
         }
-        root.children(self.render_overlays(window.viewport_size(), cx))
+        root.children(self.render_overlays(window, cx))
             // Linux, when the window decorates itself: its resize edges.
             .children(crate::ui::window_chrome::resize_edges(window))
     }
@@ -2776,11 +2746,8 @@ pub fn panel_box() -> gpui::Div {
 impl Editor {
     /// The toast, the open popup menu and the Shortcuts dialog, over
     /// everything else.
-    fn render_overlays(
-        &mut self,
-        viewport: Size<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    fn render_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let viewport = window.viewport_size();
         let mut out = vec![];
         if let Some(popup) = &self.popup {
             out.push(crate::ui::dialogs::popup_menu(popup, viewport, cx).into_any_element());
@@ -2793,6 +2760,9 @@ impl Editor {
         }
         if self.settings_open {
             out.push(self.render_settings(viewport, cx));
+        }
+        if self.export.is_some() {
+            out.push(self.render_export(window, cx));
         }
         if let Some(confirm) = &self.confirm {
             out.push(crate::ui::dialogs::confirm_dialog(confirm, cx).into_any_element());

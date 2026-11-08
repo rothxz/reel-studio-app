@@ -7,6 +7,7 @@
 use gpui::{Context, FontWeight, MouseButton, Window, div, prelude::*, px};
 
 use crate::editor::{Editor, HEADER_HEIGHT, PopupItem};
+use crate::export;
 use crate::prefs::RESOLUTIONS;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
@@ -166,7 +167,7 @@ impl Editor {
                         chip("resolution")
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(|ed, e: &gpui::ClickEvent, _, cx| {
-                                let items = RESOLUTIONS
+                                let mut items: Vec<PopupItem> = RESOLUTIONS
                                     .iter()
                                     .enumerate()
                                     .map(|(i, (label, _))| {
@@ -178,6 +179,22 @@ impl Editor {
                                         .checked(ed.prefs.export_resolution == i)
                                     })
                                     .collect();
+                                // The frame rate: the project's own (snapped)
+                                // until one is picked.
+                                let fps = ed
+                                    .export_fps
+                                    .unwrap_or_else(|| export::snap_fps(ed.project.canvas.fps));
+                                items.push(PopupItem::separator());
+                                items.extend(export::FRAME_RATES.iter().map(|&rate| {
+                                    PopupItem::new(
+                                        format!("{rate} fps"),
+                                        move |ed: &mut Editor, _, cx| {
+                                            ed.export_fps = Some(rate);
+                                            cx.notify();
+                                        },
+                                    )
+                                    .checked(fps == rate)
+                                }));
                                 ed.open_popup(e.position(), items, cx);
                             }))
                             .child(

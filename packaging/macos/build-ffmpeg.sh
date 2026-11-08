@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds the FFmpeg the released app links: static libraries, LGPL only (no
-# GPL / nonfree parts), decoding only, nothing from Homebrew. The app is
-# then one self-contained binary that runs on macOS 11+; a Homebrew FFmpeg
-# would pull in dozens of GPL dylibs built for the runner's macOS.
+# GPL / nonfree parts), decoding plus the few encoders export needs,
+# nothing from Homebrew. The app is then one self-contained binary that
+# runs on macOS 11+; a Homebrew FFmpeg would pull in dozens of GPL dylibs
+# built for the runner's macOS.
 #
 #   packaging/macos/build-ffmpeg.sh <arm64|x86_64> <prefix>
 #
@@ -51,8 +52,12 @@ flags=(
   --disable-doc
   --disable-network
   --disable-devices
+  # Export: H.264 on the system's VideoToolbox, AAC (FFmpeg's own, or
+  # AudioToolbox), MPEG-4 as a last resort, in an MP4.
   --disable-encoders
+  --enable-encoder=h264_videotoolbox,aac,aac_at,mpeg4
   --disable-muxers
+  --enable-muxer=mp4
   # Nothing found on the build machine by accident (Homebrew's lzma, SDL,
   # x264…): only what is listed here, all part of macOS.
   --disable-autodetect

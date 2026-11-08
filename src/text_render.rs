@@ -77,6 +77,14 @@ pub const FONTS: &[(&str, &str)] = &[
     ("Courier New", "Courier"),
 ];
 
+/// Pixels per canvas px to draw a text clip at: the output's scale over
+/// the document canvas (`out_scale`) times its zoom, in quarter octaves
+/// (so it stays sharp scaled up, without a redraw every zoom step).
+pub fn raster_px(zoom: f32, out_scale: f32) -> f32 {
+    let zoom = zoom.clamp(0.05, 20.);
+    out_scale * 2f32.powf((zoom.log2() * 4.).round() / 4.).clamp(0.25, 6.)
+}
+
 pub fn font_label(family: &str) -> &str {
     FONTS
         .iter()

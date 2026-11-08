@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds the FFmpeg the released Windows app links: static libraries, LGPL
-# only (no GPL / nonfree parts), decoding only; the same configuration as
-# packaging/macos/build-ffmpeg.sh, compiled by MSVC so it links into the
-# Rust (MSVC) binary. The app is then one self-contained .exe.
+# only (no GPL / nonfree parts), decoding plus export's encoders; much the
+# same configuration as packaging/macos/build-ffmpeg.sh, compiled by MSVC so
+# it links into the Rust (MSVC) binary. The app is then one self-contained
+# .exe.
 #
 #   packaging/windows/build-ffmpeg.sh <prefix>
 #
@@ -102,11 +103,16 @@ flags=(
   --disable-doc
   --disable-network
   --disable-devices
+  # Export: H.264 through Media Foundation (part of Windows), AAC,
+  # MPEG-4 as a last resort, in an MP4.
   --disable-encoders
+  --enable-encoder=h264_mf,aac,mpeg4
   --disable-muxers
+  --enable-muxer=mp4
   # Nothing found on the build machine by accident: only what is listed.
   --disable-autodetect
   --enable-w32threads
+  --enable-mediafoundation
   --enable-zlib
 )
 if ! command -v nasm > /dev/null; then

@@ -20,6 +20,8 @@ pub struct Prefs {
     pub snapping: bool,
     /// Export resolution: index into `RESOLUTIONS`.
     pub export_resolution: usize,
+    /// The folder the last export went to.
+    pub export_dir: Option<String>,
 }
 
 impl Default for Prefs {
@@ -33,6 +35,7 @@ impl Default for Prefs {
             preview_axis: true,
             snapping: true,
             export_resolution: 1,
+            export_dir: None,
         }
     }
 }
