@@ -90,6 +90,19 @@ src/stickers.rs    sticker / GIF frames for the player (decode, loop)
 src/text_render.rs text clips drawn as pictures (cosmic-text + tiny-skia)
 src/audio.rs       sound out (cpal): timeline mixer in step with the
                    engine, library previews
+src/agent/         the AI agent: providers, keys (keychain), llm (Ollama /
+                   OpenAI-style / Anthropic dialects, vision), snapshot
+                   (the project as the model reads it, short ids), skills
+                   (a job's know-how + extra tools per request: routed
+                   by its words or `use_skill`; <data>/skills/*.md), tools
+                   (edit, motion: titles + animate, sound: find / add /
+                   sound_design, produce: voiceover, captions, music,
+                   stickers, drawn scenes, make_video; look), sfx (app
+                   library + Openverse, onset / peak analysis), voice
+                   (text to speech: OpenAI / Gemini key, else `say`),
+                   captions (timed to the voice's pauses), graphics
+                   (motion-graphic scenes drawn with tiny-skia), movie
+                   (frames → H.264 MP4), eval (real-model scoring)
 src/effects/       video effects + filters in the preview: shader packages
                    (download, hash check, cache), the passes at a time
                    (stack), Metal source (msl: the effect dialect →
@@ -106,7 +119,8 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    crop (the Crop dialog), layers (Arrange layers),
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
-                   dialogs (popup, confirm, shortcuts), widgets,
+                   dialogs (popup, confirm, shortcuts), agent (the AI
+                   agent panel + its turn loop), widgets,
                    icons (icon fonts served as SVG)
 engine-shim/       C ABI over videoengine::Engine (+ FindActiveClips etc.)
 assets/fonts/      bundled fonts + licences

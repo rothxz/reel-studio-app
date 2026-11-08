@@ -69,6 +69,10 @@ impl History {
         Some((step.label, step.project))
     }
 
+    /// Undo steps there are (the agent counts a turn's edits by it).
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
