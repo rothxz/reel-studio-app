@@ -114,7 +114,7 @@ panel, sheet and gesture is a rewrite in Rust. The biggest items:
 | Audio playback + waveform | Web Audio | `cpal` + the engine's `AudioMixer` |
 | AI tools (captions, Remove BG, …) | Transformers.js workers | `ort` / `candle`, or the native models the phone apps already use |
 | Widgets (inputs, sliders, menus, dialogs) | React components | `gpui-component` (0.9) covers most; GPUI is still pre-1.0 and its API moves. |
-| Languages incl. Khmer | i18n + Kantumruy Pro | Bundle fonts; GPUI shapes text with Core Text / DirectWrite, so Khmer should work but is unverified. |
+| Languages incl. Khmer | i18n + Kantumruy Pro | `src/i18n.rs` with the app's dictionaries compiled in. Kantumruy Pro bundled: the whole UI uses it while the language is Khmer (`theme::font_body` / `font_mono`); Chinese renders through the system's font fallback (verified on macOS). |
 | Auto-update, installers | electron-builder + electron-updater | Done for macOS: `packaging/macos/bundle.sh` (app, dmg, zip), `src/updater.rs`, `.github/workflows/release.yml`. Windows / Linux still to do. |
 
 **Suggested path if we go ahead:**

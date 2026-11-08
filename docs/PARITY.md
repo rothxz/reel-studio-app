@@ -34,9 +34,19 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [~] Settings dialog: Updates, Privacy (share anonymous usage data) and
-  About (version). *No language,
-  appearance or storage yet.*
+- [~] Settings dialog: General (Language), Updates, Privacy (share
+  anonymous usage data) and About (version). *No appearance or storage
+  yet.*
+- [~] Languages: English, Khmer, Vietnamese, Simplified Chinese,
+  Indonesian (Settings → Language, "Same as device" by default; the UI
+  and the app menu switch at once). The app's dictionaries are compiled
+  in from the checkout; strings are looked up by their English text, so
+  only strings worded exactly as the old editor's translate. *Desktop-only
+  strings with no dictionary entry stay English: Privacy row, update
+  dialog, export screen messages, AI agent panel, File menu items,
+  Create New Project, undo labels.* In Khmer every UI text is set in the
+  bundled Kantumruy Pro (mono labels and timecodes too), with line
+  heights of at least 1.5 × the size, as the old editor does.
 - [~] Toasts (single slot, 1.6 s, as the old app), confirm dialog, popup
   menus. *No blocking progress dialog yet.*
 - [~] Auto-update + installers to replace electron-builder /

@@ -143,9 +143,35 @@ pub fn backdrop() -> Rgba {
 // ---- type ---------------------------------------------------------------------
 
 /// Headings and body (rounded).
-pub const FONT_BODY: &str = "Nunito";
+const FONT_BODY: &str = "Nunito";
 /// Small uppercase labels, metadata and timecodes.
-pub const FONT_MONO: &str = "IBM Plex Mono";
+const FONT_MONO: &str = "IBM Plex Mono";
+/// Every UI text while the language is Khmer, as in the old editor: our
+/// Latin faces have no Khmer glyphs. Its own weights (400–700) stand in for
+/// the ones asked for.
+const FONT_KHMER: &str = "Kantumruy Pro";
+
+fn khmer() -> bool {
+    crate::i18n::locale() == crate::i18n::Locale::Km
+}
+
+/// The body face (Kantumruy Pro in Khmer).
+pub fn font_body() -> &'static str {
+    if khmer() { FONT_KHMER } else { FONT_BODY }
+}
+
+/// The mono face for labels and timecodes (Kantumruy Pro in Khmer, like
+/// every other text there).
+pub fn font_mono() -> &'static str {
+    if khmer() { FONT_KHMER } else { FONT_MONO }
+}
+
+/// A fixed line height for text of `size`: as given, but in Khmer at least
+/// 1.5 × the size, since its stacked vowels and subscripts clip in a line
+/// height tuned for Latin.
+pub fn line_height(line: f32, size: f32) -> gpui::Pixels {
+    gpui::px(if khmer() { line.max(size * 1.5) } else { line })
+}
 
 /// Text sizes in px (xxs 9 · xs 11 · sm 12 · md 14 · lg 16).
 pub const XXS: f32 = 9.;
@@ -172,5 +198,9 @@ pub fn embedded_fonts() -> Vec<std::borrow::Cow<'static, [u8]>> {
         font!("IBMPlexMono_400Regular.ttf"),
         font!("IBMPlexMono_500Medium.ttf"),
         font!("IBMPlexMono_600SemiBold.ttf"),
+        font!("KantumruyPro_400Regular.ttf"),
+        font!("KantumruyPro_500Medium.ttf"),
+        font!("KantumruyPro_600SemiBold.ttf"),
+        font!("KantumruyPro_700Bold.ttf"),
     ]
 }

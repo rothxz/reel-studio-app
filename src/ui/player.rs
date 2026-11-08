@@ -250,7 +250,7 @@ impl Editor {
                             .border_color(theme::text_secondary())
                             .cursor_pointer()
                             .hover(|s| s.bg(theme::button_hover()))
-                            .font_family(theme::FONT_MONO)
+                            .font_family(theme::font_mono())
                             .text_size(px(theme::SM))
                             .font_weight(FontWeight::NORMAL)
                             .on_click(cx.listener(|ed, e: &gpui::ClickEvent, _, cx| {

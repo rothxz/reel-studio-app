@@ -28,6 +28,7 @@ use crate::agent::snapshot::{SnapshotContext, snapshot};
 use crate::agent::tools::{self, Env, Finish, Outcome, Progress, ToolResult};
 use crate::agent::{self, Item, Status, keys};
 use crate::editor::{Editor, PopupItem};
+use crate::i18n::t;
 use crate::model::Micros;
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -661,7 +662,7 @@ impl Editor {
                 div()
                     .text_size(px(theme::SM))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("AI agent"),
+                    .child(t("AI agent")),
             )
             .child(
                 div()
@@ -672,10 +673,10 @@ impl Editor {
                     .rounded(px(4.))
                     .border_1()
                     .border_color(theme::chip_border())
-                    .font_family(theme::FONT_MONO)
+                    .font_family(theme::font_mono())
                     .text_size(px(theme::XXS))
                     .text_color(theme::text_tertiary())
-                    .child("EXPERIMENTAL"),
+                    .child(t("EXPERIMENTAL")),
             )
             .child(div().flex_1())
             .child(
@@ -741,10 +742,10 @@ impl Editor {
         div()
             .mt(px(12.))
             .mb(px(6.))
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::font_mono())
             .text_size(px(theme::XXS))
             .text_color(theme::text_tertiary())
-            .child(text.to_uppercase())
+            .child(crate::i18n::t(text).to_uppercase())
     }
 
     fn agent_setup(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1156,7 +1157,7 @@ impl Editor {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(theme::FONT_MONO)
+                                    .font_family(theme::font_mono())
                                     .text_size(px(theme::XXS))
                                     .text_color(theme::text_tertiary())
                                     .child(detail.clone()),

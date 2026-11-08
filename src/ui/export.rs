@@ -410,7 +410,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(theme::SM))
-                            .font_family(theme::FONT_MONO)
+                            .font_family(theme::font_mono())
                             .text_color(theme::text_tertiary())
                             .text_center()
                             .child(self.project.name.clone()),
@@ -527,7 +527,7 @@ impl Editor {
                             .text_size(px(28.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text())
-                            .child(title),
+                            .child(crate::i18n::ts(title)),
                     )
                     .child(
                         div()
@@ -542,7 +542,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(theme::XS))
-                            .font_family(theme::FONT_MONO)
+                            .font_family(theme::font_mono())
                             .text_color(theme::text_tertiary())
                             .child(spec),
                     )

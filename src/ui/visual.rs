@@ -681,7 +681,7 @@ impl Editor {
             .bg(theme::chip_bg())
             .border_1()
             .border_color(theme::chip_border())
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::font_mono())
             .text_size(px(theme::XS))
             .when_some(prefix, |d, p| {
                 d.child(div().text_color(theme::text_tertiary()).child(p))
@@ -1029,7 +1029,7 @@ impl Editor {
                         } else {
                             theme::text_disabled()
                         })
-                        .child(label),
+                        .child(crate::i18n::ts(label)),
                 )
                 .when(enabled, |d| d.cursor_pointer())
         };
@@ -1665,7 +1665,7 @@ impl Editor {
                         })
                         .child(
                             div()
-                                .font_family(theme::FONT_MONO)
+                                .font_family(theme::font_mono())
                                 .text_size(px(theme::SM))
                                 .text_color(theme::text())
                                 .child(l.to_string()),

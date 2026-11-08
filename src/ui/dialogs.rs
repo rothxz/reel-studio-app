@@ -172,7 +172,7 @@ pub fn shortcuts_dialog(cx: &mut Context<Editor>) -> impl IntoElement {
                                 .flex_1()
                                 .text_size(px(theme::LG))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Keyboard shortcuts"),
+                                .child(crate::i18n::t("Keyboard shortcuts")),
                         )
                         .child(
                             div()
@@ -217,7 +217,7 @@ pub fn shortcuts_dialog(cx: &mut Context<Editor>) -> impl IntoElement {
                                                 .flex_1()
                                                 .text_size(px(theme::SM))
                                                 .text_color(theme::text_secondary())
-                                                .child(s.label),
+                                                .child(crate::i18n::t(s.label)),
                                         )
                                         .child(div().flex().items_center().gap_1().children(
                                             combo_keys(s.combos[0]).into_iter().map(keycap),
@@ -267,13 +267,13 @@ pub fn confirm_dialog(
                     div()
                         .text_size(px(theme::LG))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(confirm.title.clone()),
+                        .child(crate::i18n::ts(confirm.title.clone())),
                 )
                 .child(
                     div()
                         .text_size(px(theme::SM))
                         .text_color(theme::text_secondary())
-                        .child(confirm.message.clone()),
+                        .child(crate::i18n::ts(confirm.message.clone())),
                 )
                 .child(
                     div()

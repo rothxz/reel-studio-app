@@ -177,10 +177,10 @@ fn group_label(label: &str) -> impl IntoElement {
         .flex()
         .items_end()
         .pb(px(4.))
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::font_mono())
         .text_size(px(10.))
         .text_color(theme::text_tertiary())
-        .child(label.to_uppercase())
+        .child(crate::i18n::ts(label.to_string()).to_uppercase())
 }
 
 #[cfg(test)]
