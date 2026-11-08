@@ -275,6 +275,9 @@ pub struct Editor {
     pub(crate) play_follow_x: Option<f32>,
 
     pub(crate) history: History,
+    /// The open project's analytics session (first edit, gesture rate
+    /// limits, the summary when it closes).
+    pub(crate) analytics: crate::analytics::EditorSession,
     pub(crate) prefs: Prefs,
     pub(crate) tool: Tool,
     pub(crate) clipboard: Option<ClipboardEntry>,
@@ -524,6 +527,7 @@ impl Editor {
             scroll_x: 0.,
             play_follow_x: None,
             history: History::default(),
+            analytics: Default::default(),
             prefs: Prefs::load(),
             tool: Tool::Select,
             clipboard: None,
@@ -620,6 +624,8 @@ impl Editor {
             preview_fps: 0.,
             focus,
         };
+        crate::analytics::init(editor.prefs.share_usage_data);
+        crate::analytics::track("app_opened", serde_json::json!({ "source": "launch" }));
         // The agent panel opens with the app: load its model meanwhile.
         if editor.agent.settings.open {
             editor.agent_warm_up(cx);
@@ -854,6 +860,7 @@ impl Editor {
         if magnet && self.prefs.main_track_magnet {
             next = model::with_magnet(&before, next, self.prefs.linkage);
         }
+        self.analytics.edited(label, &before, &next);
         self.project = next;
         self.history.record(label, before, coalesce.as_deref());
         self.dirty = true;
@@ -877,7 +884,10 @@ impl Editor {
                 continue;
             }
             match decoder::probe(&path) {
-                Ok(item) => self.add_to_library(item, cx),
+                Ok(item) => {
+                    track_import(&item);
+                    self.add_to_library(item, cx)
+                }
                 Err(e) => self.toast(format!("Can't open {path}: {e}"), cx),
             }
         }
@@ -979,6 +989,8 @@ impl Editor {
                 self.add_to_library(item, cx);
             }
         }
+        let previous = (self.screen == Screen::Editor).then_some(&self.project);
+        self.analytics.begin(previous);
         self.project = project;
         self.history.clear();
         // A different project: the agent's chat and ids start over.
@@ -1026,7 +1038,12 @@ impl Editor {
             return;
         }
         self.start_session(project, cx);
+        crate::analytics::track(
+            "project_created",
+            serde_json::json!({ "projectType": "video", "origin": "media" }),
+        );
         for item in items {
+            track_import(&item);
             self.add_to_library(item, cx);
         }
         self.zoom_to_fit(cx);
@@ -1040,11 +1057,19 @@ impl Editor {
         project.updated_at = project.created_at.clone();
         self.home_selection = None;
         self.start_session(project, cx);
+        crate::analytics::track(
+            "project_created",
+            serde_json::json!({ "projectType": "video", "origin": "blank" }),
+        );
     }
 
     pub fn open_saved_project(&mut self, id: &str, cx: &mut Context<Self>) {
         match projects::load(id) {
             Ok(project) => {
+                crate::analytics::track(
+                    "project_opened",
+                    serde_json::json!({ "projectId": project.id }),
+                );
                 self.start_session(project, cx);
                 self.zoom_to_fit(cx);
             }
@@ -1069,6 +1094,10 @@ impl Editor {
                     return;
                 }
                 let name = project.name.clone();
+                crate::analytics::track(
+                    "project_opened",
+                    serde_json::json!({ "projectId": project.id, "source": "file" }),
+                );
                 self.start_session(project, cx);
                 self.toast(format!("Opened {name}"), cx);
             }
@@ -1125,6 +1154,7 @@ impl Editor {
             self.stale_frames.push(old);
         }
         self.popup = None;
+        self.analytics.end(Some(&self.project));
         self.screen = Screen::Home;
         self.refresh_home(cx);
     }
@@ -1156,6 +1186,9 @@ impl Editor {
         }
         self.home_selection = None;
         self.refresh_home(cx);
+        if deleted > 0 {
+            crate::analytics::track("project_deleted", serde_json::json!({ "count": deleted }));
+        }
         match failed {
             Some(e) => self.toast(format!("Couldn't delete it: {e}"), cx),
             None => self.toast(
@@ -1414,6 +1447,7 @@ impl Editor {
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
         if let Some((_, project)) = self.history.undo(self.project.clone()) {
+            self.analytics.undone();
             self.project = project;
             self.dirty = true;
             self.schedule_autosave(cx);
@@ -1423,6 +1457,7 @@ impl Editor {
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
         if let Some((_, project)) = self.history.redo(self.project.clone()) {
+            self.analytics.redone();
             self.project = project;
             self.dirty = true;
             self.schedule_autosave(cx);
@@ -2646,6 +2681,10 @@ impl Render for Editor {
             // Quitting saves first.
             .on_action(cx.listener(|ed, _: &Quit, _, cx| {
                 ed.save_now(cx);
+                if ed.screen == Screen::Editor {
+                    ed.analytics.end(Some(&ed.project));
+                }
+                crate::analytics::flush(std::time::Duration::from_secs(2));
                 cx.quit();
             }))
             .relative()
@@ -2854,4 +2893,27 @@ pub fn timecode(t: Micros, fps: f64) -> String {
         secs % 60,
         f
     )
+}
+
+/// `media_imported` for one file the user brought in (kind, size, length).
+fn track_import(item: &MediaItem) {
+    let kind = if !item.has_video {
+        "audio"
+    } else if item.still {
+        "image"
+    } else {
+        "video"
+    };
+    let size_mb = std::fs::metadata(&item.path)
+        .map(|m| (m.len() as f64 / 1_048_576. * 10.).round() / 10.)
+        .ok();
+    crate::analytics::track(
+        "media_imported",
+        serde_json::json!({
+            "mediaType": kind,
+            "count": 1,
+            "fileSizeMB": size_mb,
+            "durationMs": (!item.still).then_some(item.duration / 1000),
+        }),
+    );
 }

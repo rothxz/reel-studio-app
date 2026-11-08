@@ -3,6 +3,7 @@
 
 mod adjust;
 mod agent;
+mod analytics;
 mod assets;
 mod audio;
 mod catalog;
