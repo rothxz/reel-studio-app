@@ -3,8 +3,9 @@
 //! workflow (.github/workflows/release.yml). Each one carries an
 //! `update.json` naming, per platform, a zipped app with its SHA-256.
 //!
-//! Like the old desktop shell: it checks on launch and every 4 h, never
-//! downloads by itself (Settings → App updates → Download), then asks to
+//! It checks on launch and every 4 h; a new version opens the update
+//! dialog (ui/update_dialog.rs) with the release notes. It never downloads
+//! by itself (the dialog's Download & install, or Settings), then asks to
 //! restart; "Later" installs when the app quits. Installing swaps the
 //! download in for the running app (same folder), so it needs an installed
 //! copy in a folder the user can write to, never a `cargo run`:
@@ -68,6 +69,10 @@ pub struct Updater {
     /// The newer version found (kept through a failed download, so "Try
     /// again" retries the download).
     pub version: Option<SharedString>,
+    /// What's new in it: the release's notes (Markdown), if it has any.
+    pub notes: Option<SharedString>,
+    /// When it was released (`YYYY-MM-DD`).
+    pub released: Option<SharedString>,
     found: Option<Found>,
     /// The checked new bundle, waiting to be swapped in.
     staged: Option<PathBuf>,
@@ -78,6 +83,8 @@ pub struct Updater {
 #[derive(Clone, Debug)]
 struct Found {
     version: String,
+    notes: Option<String>,
+    released: Option<String>,
     file: Asset,
     /// The same file through GitHub's API (see `get_release_file`).
     api_url: Option<String>,
@@ -107,6 +114,11 @@ pub struct Release {
     pub tag_name: String,
     #[serde(default)]
     pub draft: bool,
+    /// The release notes (Markdown).
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
     #[serde(default)]
     pub assets: Vec<ReleaseAsset>,
 }
@@ -160,6 +172,8 @@ impl Updater {
                     Status::Unsupported
                 },
                 version: None,
+                notes: None,
+                released: None,
                 found: None,
                 staged: None,
                 target,
@@ -184,6 +198,8 @@ impl Updater {
             match result {
                 Ok(Some(found)) => {
                     u.version = Some(found.version.clone().into());
+                    u.notes = found.notes.clone().map(Into::into);
+                    u.released = found.released.clone().map(Into::into);
                     u.found = Some(found);
                     u.status = Status::Available;
                 }
@@ -452,6 +468,17 @@ fn find_update() -> Result<Option<Found>> {
     Ok(
         pick(&manifest, &version, VERSION, os.as_deref())?.map(|file| Found {
             api_url: api_url_for(release, &file.url),
+            notes: release
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(str::to_string),
+            released: release
+                .published_at
+                .as_deref()
+                .and_then(|d| d.get(..10))
+                .map(str::to_string),
             version,
             file,
         }),
@@ -813,6 +840,8 @@ mod tests {
         Release {
             tag_name: tag.into(),
             draft,
+            body: None,
+            published_at: None,
             assets: if manifest {
                 vec![
                     ReleaseAsset {

@@ -1,18 +1,19 @@
 //! The projects home, before the editor, laid out like the old desktop
 //! shell: a left sidebar (Edit, Projects, Settings) beside the page.
 //!
-//! Edit: the greeting and drafts count, the New video card (a blank
-//! project in the editor; files dropped anywhere on the window start one
-//! with them) pinned over the list, shrinking to a slim bar as the list
-//! scrolls, then Recent: the newest drafts, with "See all" into Projects.
+//! Edit: the greeting and drafts count, the Create New Project button (a
+//! blank project in the editor; files dropped anywhere on the window start
+//! one with them) fixed over the list, then Recent: the newest drafts, with
+//! "See all" into Projects.
 //! Projects: every draft. A click opens a draft; a right click offers
 //! Open / Select / Delete. Select mode ticks drafts for one Delete.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, ExternalPaths, FontWeight, MouseButton, MouseDownEvent, ObjectFit,
-    SharedString, Window, div, img, prelude::*, px, rgba,
+    RenderImage, SharedString, Window, div, img, prelude::*, px, rgba,
 };
 
 use crate::editor::{Confirm, Editor, HEADER_HEIGHT, HomeTab, PopupItem};
@@ -28,18 +29,7 @@ const PAGE_PAD: f32 = 20.;
 /// Drafts the Edit page lists before "See all".
 const HOME_RECENT_LIMIT: usize = 5;
 
-const CARD_HEIGHT: f32 = 118.;
-const COLLAPSED_HEIGHT: f32 = 52.;
-/// Scroll distance over which the card collapses (the height it loses, so
-/// the list under it never gaps).
-const COLLAPSE_RANGE: f32 = CARD_HEIGHT - COLLAPSED_HEIGHT;
-const CARD_PAD: f32 = 14.;
-const COLLAPSED_PAD: f32 = 10.;
-const ICON: f32 = 36.;
-const ICON_SMALL: f32 = 30.;
-const TITLE_LINE: f32 = 20.;
-const SUB_LINE: f32 = 16.;
-const TEXT_GAP: f32 = 8.;
+const NEW_BUTTON_HEIGHT: f32 = 84.;
 
 const THUMB_W: f32 = 60.;
 const THUMB_H: f32 = 76.;
@@ -57,10 +47,6 @@ pub fn greeting() -> &'static str {
 fn local_hour() -> u32 {
     use chrono::Timelike as _;
     chrono::Local::now().hour()
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
 }
 
 /// A title-bar strip: its empty space moves the window (double-click
@@ -184,10 +170,6 @@ impl Editor {
         } else {
             "Projects".into()
         };
-        // How far the New video card has collapsed (0 open, 1 slim).
-        let scrolled = (-f32::from(self.home_scroll.offset().y)).max(0.);
-        let collapse = (scrolled / COLLAPSE_RANGE).clamp(0., 1.);
-
         let shown = if is_home {
             count.min(HOME_RECENT_LIMIT)
         } else {
@@ -204,14 +186,11 @@ impl Editor {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.home_scroll)
-            // Re-render as it scrolls: the card's collapse follows the offset.
-            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .child(
                 div()
                     .w_full()
                     .px(px(PAGE_PAD))
                     .pb(px(120.))
-                    .when(is_home, |d| d.pt(px(CARD_HEIGHT)))
                     .flex()
                     .flex_col()
                     .gap(px(10.))
@@ -261,31 +240,21 @@ impl Editor {
                             .child(mono(drafts, 9.5, theme::text_faint())),
                     ),
             )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .child(list)
-                    // Opaque, so rows scroll under the card, not through it.
-                    .when(is_home, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .right_0()
-                                .px(px(PAGE_PAD))
-                                .pb_2()
-                                .bg(theme::page_bg())
-                                .child(self.new_video_card(collapse, cx)),
-                        )
-                    }),
-            )
+            // Fixed over the list: Recent scrolls under it.
+            .when(is_home, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .px(px(PAGE_PAD))
+                        .pb_2()
+                        .child(self.new_project_button(cx)),
+                )
+            })
+            .child(div().flex_1().min_h_0().child(list))
     }
 
-    /// "Recent" (or "N selected" with Cancel / Delete while selecting) and
-    /// the Videos tab with its count, once there's a draft.
+    /// "Recent" (or "N selected" with Cancel / Delete while selecting), once
+    /// there's a draft.
     fn list_header(&self, is_home: bool, has_more: bool, cx: &mut Context<Self>) -> AnyElement {
         let count = self.home_projects.len();
         if count == 0 {
@@ -335,13 +304,6 @@ impl Editor {
                         }),
                 )
             })
-            .child(
-                div()
-                    .mb(px(12.))
-                    .flex()
-                    .gap_2()
-                    .child(recent_tab_pill("Videos", count, true)),
-            )
             .into_any_element()
     }
 
@@ -405,80 +367,54 @@ impl Editor {
         cx.notify();
     }
 
-    // ---- New video ----------------------------------------------------------
+    // ---- Create New Project -------------------------------------------------
 
-    /// The accent card: icon top-left and title bottom-left, sliding into a
-    /// slim bar (icon centred, title beside it, subtitle faded) as `p` → 1.
-    fn new_video_card(&self, p: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let icon = lerp(ICON, ICON_SMALL, p);
-        let text_top = lerp(
-            CARD_HEIGHT - CARD_PAD - TITLE_LINE - SUB_LINE,
-            (COLLAPSED_HEIGHT - TITLE_LINE) / 2.,
-            p,
-        );
-        let text_left = lerp(CARD_PAD, COLLAPSED_PAD + ICON_SMALL + TEXT_GAP, p);
-        // Gone in the first half, before the title reaches the icon.
-        let sub_opacity = (1. - p * 2.).clamp(0., 1.);
+    /// A dark card button, icon and title side by side in the middle.
+    fn new_project_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("new-video")
-            .relative()
-            .overflow_hidden()
-            .h(px(lerp(CARD_HEIGHT, COLLAPSED_HEIGHT, p)))
+            .id("new-project")
+            .h(px(NEW_BUTTON_HEIGHT))
             .rounded(px(16.))
-            .bg(theme::accent())
+            .bg(theme::sheet())
+            .border_1()
+            .border_color(theme::chip_border())
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
             .cursor_pointer()
-            .hover(|s| s.opacity(0.94))
-            .active(|s| s.opacity(0.85))
+            .hover(|s| s.bg(theme::button_bg()))
+            .active(|s| s.bg(theme::button_hover()))
             .on_click(cx.listener(|ed, _, _, cx| ed.new_blank_project(cx)))
+            .child(Icon::Videocam.el(24., theme::text()))
             .child(
                 div()
-                    .absolute()
-                    .left(px(lerp(CARD_PAD, COLLAPSED_PAD, p)))
-                    .top(px(lerp(CARD_PAD, (COLLAPSED_HEIGHT - ICON_SMALL) / 2., p)))
-                    .size(px(icon))
-                    .rounded(px(10.))
-                    .bg(rgba(0x1a160824))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::Videocam.el(20., theme::accent_text())),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(text_left))
-                    .right(px(CARD_PAD - 4.))
-                    .top(px(text_top))
-                    .child(
-                        div()
-                            .h(px(TITLE_LINE))
-                            .flex()
-                            .items_center()
-                            .truncate()
-                            .text_size(px(lerp(16., 14., p)))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme::accent_text())
-                            .child("New video"),
-                    )
-                    .child(
-                        div()
-                            .h(px(SUB_LINE))
-                            .truncate()
-                            .text_size(px(11.5))
-                            .text_color(theme::accent_text())
-                            .opacity(0.6 * sub_opacity)
-                            .child("Clips, music & text"),
-                    ),
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme::text())
+                    .child("Create New Project"),
             )
     }
 
     // ---- rows ---------------------------------------------------------------
 
+    /// A draft's picture cropped to the tile's shape. GPUI rounds an
+    /// image's drawn rectangle, and a cover-fitted picture overflows the
+    /// tile, so its rounded corners would be clipped off.
+    fn home_thumb(&self, src: &str) -> Option<Arc<RenderImage>> {
+        if let Some(t) = self.home_thumbs.borrow().get(src) {
+            return Some(t.clone());
+        }
+        let full = self.thumbs.get(src)?;
+        let cropped = cover_crop(full, THUMB_W / THUMB_H).unwrap_or_else(|| full.clone());
+        self.home_thumbs
+            .borrow_mut()
+            .insert(src.to_string(), cropped.clone());
+        Some(cropped)
+    }
+
     fn project_row(&self, i: usize, p: &Summary, cx: &mut Context<Self>) -> impl IntoElement {
-        let thumb = p
-            .preview
-            .as_ref()
-            .and_then(|(src, _)| self.thumbs.get(src).cloned());
+        let thumb = p.preview.as_ref().and_then(|(src, _)| self.home_thumb(src));
         let picked = self.home_selection.as_ref().map(|s| s.contains(&p.id));
         let click_id = p.id.clone();
         let menu_id = p.id.clone();
@@ -551,10 +487,13 @@ impl Editor {
                     .justify_center()
                     .map(|d| match thumb {
                         Some(t) => d.child(
+                            // Rounded itself (overflow_hidden clips
+                            // square); cropped to the tile, so it fills it.
                             img(t)
                                 .absolute()
                                 .inset_0()
                                 .size_full()
+                                .rounded(px(10.))
                                 .object_fit(ObjectFit::Cover),
                         ),
                         None => d.child(Icon::Film.el(20., theme::text_faint())),
@@ -605,6 +544,24 @@ impl Editor {
     }
 }
 
+/// The middle of `image` at `aspect` (width / height), as cover fitting
+/// shows it.
+fn cover_crop(image: &RenderImage, aspect: f32) -> Option<Arc<RenderImage>> {
+    let size = image.size(0);
+    let (w, h) = (size.width.0 as u32, size.height.0 as u32);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let (cw, ch) = if w as f32 / h as f32 > aspect {
+        (((h as f32 * aspect).round() as u32).clamp(1, w), h)
+    } else {
+        (w, ((w as f32 / aspect).round() as u32).clamp(1, h))
+    };
+    let pixels = image::RgbaImage::from_raw(w, h, image.as_bytes(0)?.to_vec())?;
+    let crop = image::imageops::crop_imm(&pixels, (w - cw) / 2, (h - ch) / 2, cw, ch).to_image();
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(crop)])))
+}
+
 /// One sidebar entry: icon, the label beside it, the current page on a
 /// soft fill.
 fn sidebar_row(
@@ -640,44 +597,6 @@ fn sidebar_row(
         .on_click(click)
         .child(icon.el(20., color))
         .child(label)
-}
-
-/// A monochrome tab pill over the drafts: the selected one filled, its
-/// count in a quieter weight.
-fn recent_tab_pill(label: &'static str, count: usize, on: bool) -> impl IntoElement {
-    div()
-        .h(px(34.))
-        .px(px(14.))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .text_size(px(theme::SM))
-        .bg(if on {
-            theme::text()
-        } else {
-            theme::fill_subtle()
-        })
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(if on {
-                    theme::page_bg()
-                } else {
-                    theme::text_secondary()
-                })
-                .child(label),
-        )
-        .child(
-            div()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(if on {
-                    rgba(0x1414168c)
-                } else {
-                    theme::text_faint()
-                })
-                .child(count.to_string()),
-        )
 }
 
 /// "Drop to start", shown only while files are dragged over the window

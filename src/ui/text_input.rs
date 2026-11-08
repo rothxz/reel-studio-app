@@ -43,6 +43,7 @@ actions!(
         WordLeft,
         WordRight,
         Enter,
+        NewLine,
         Escape,
         Paste,
         Cut,
@@ -81,6 +82,8 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-left", WordLeft, c),
         KeyBinding::new("alt-right", WordRight, c),
         KeyBinding::new("enter", Enter, c),
+        KeyBinding::new("shift-enter", NewLine, c),
+        KeyBinding::new("alt-enter", NewLine, c),
         KeyBinding::new("escape", Escape, c),
         KeyBinding::new("secondary-v", Paste, c),
         KeyBinding::new("secondary-c", Copy, c),
@@ -94,7 +97,7 @@ pub fn bindings() -> Vec<KeyBinding> {
 pub enum InputEvent {
     /// The text changed (typed, pasted, cut).
     Changed(String),
-    /// Enter in a one-line field.
+    /// Enter in a one-line field (or a multi-line one that sends on Enter).
     Submit(String),
     /// The field lost the keyboard (Esc, or a click elsewhere).
     Blur,
@@ -105,6 +108,9 @@ pub struct TextInput {
     content: String,
     placeholder: SharedString,
     multiline: bool,
+    /// Multi-line, but Enter submits (a chat box): Shift+Enter breaks the
+    /// line.
+    submit_on_enter: bool,
     max_len: usize,
     selected: Range<usize>,
     reversed: bool,
@@ -136,6 +142,7 @@ impl TextInput {
             content: String::new(),
             placeholder: placeholder.into(),
             multiline,
+            submit_on_enter: false,
             max_len: 2000,
             selected: 0..0,
             reversed: false,
@@ -146,6 +153,18 @@ impl TextInput {
             selecting: false,
             was_focused: false,
         }
+    }
+
+    /// Enter submits (Shift+Enter or Alt+Enter adds a line), like a chat
+    /// box.
+    pub fn submit_on_enter(mut self) -> Self {
+        self.submit_on_enter = true;
+        self
+    }
+
+    /// The caret is after the last character (nothing selected).
+    pub fn caret_at_end(&self) -> bool {
+        self.selected.is_empty() && self.selected.end >= self.content.len()
     }
 
     pub fn max_len(mut self, n: usize) -> Self {
@@ -373,12 +392,25 @@ impl TextInput {
     }
 
     fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
-        if self.multiline {
-            self.insert(self.selected.clone(), "\n");
-            self.changed(cx);
+        if self.multiline && !self.submit_on_enter {
+            self.line_break(cx);
         } else {
             cx.emit(InputEvent::Submit(self.content.clone()));
         }
+    }
+
+    /// Shift+Enter: a line break in a multi-line field, else Enter.
+    fn new_line(&mut self, _: &NewLine, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.line_break(cx);
+        } else {
+            self.enter(&Enter, window, cx);
+        }
+    }
+
+    fn line_break(&mut self, cx: &mut Context<Self>) {
+        self.insert(self.selected.clone(), "\n");
+        self.changed(cx);
     }
 
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
@@ -902,6 +934,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::word_left_action))
             .on_action(cx.listener(Self::word_right_action))
             .on_action(cx.listener(Self::enter))
+            .on_action(cx.listener(Self::new_line))
             .on_action(cx.listener(Self::escape))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
