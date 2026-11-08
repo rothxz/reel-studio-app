@@ -1,7 +1,7 @@
 # Release of the native app: every push to `release` (a merged PR, usually
 # main → release, as the old desktop build releases from its own branch)
 # builds it for macOS (Apple silicon + Intel), Linux (x64 + arm64) and
-# Windows (x64) and publishes a GitHub Release `native-v<version>` in this
+# Windows (x64) and publishes a GitHub Release `v<version>` in this
 # repo, the feed src/updater.rs reads:
 #
 #   Reel-Studio-<version>-mac-<arm64|x64>.zip        installed by the in-app updater
@@ -12,10 +12,11 @@
 #   Reel-Studio-<version>-windows-x64-setup.exe      the installer
 #   update.json                                      version + per-platform url / SHA-256 / size
 #
-# The same repo holds the previous desktop build's `v<version>` releases,
-# whose updater follows the release GitHub marks "Latest". So these are
-# published with --latest=false (and as pre-releases until the native app
-# replaces the old one: flip PRERELEASE below then).
+# plus the hand downloads again under names without the version
+# (Reel-Studio-mac-arm64.dmg, …-windows-x64-setup.exe, …-linux-x64.AppImage),
+# so the README links `releases/latest/download/<name>` always fetch the
+# newest. Each release is marked "Latest" (set PRERELEASE below to hold a
+# release back as a pre-release instead).
 #
 # Version = Cargo.toml's major.minor + this workflow's run number
 # (0.2.0 → 0.2.57), so every merge is a new release without a bump commit.
@@ -90,7 +91,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "11.0"
-  PRERELEASE: "true"
+  PRERELEASE: "false"
   # true: a release (push to `release`, or a manual run with publish);
   # false: a test build.
   PUBLISH: ${{ (github.event_name == 'push' || inputs.publish) && 'true' || 'false' }}
@@ -531,7 +532,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      TAG: native-v${{ needs.version.outputs.version }}
+      TAG: v${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -549,8 +550,9 @@ jobs:
       # What's new: the release body, which the app's update dialog shows.
       - name: Release notes
         run: |
-          prev=$(git tag -l 'native-v*' --merged "$GITHUB_SHA" --sort=-v:refname \
-            | grep -vx "$TAG" | head -n1)
+          # The previous release: `v…`, or `native-v…` before 0.2.12.
+          prev=$(git tag -l 'v*' 'native-v*' --merged "$GITHUB_SHA" \
+            --sort=-creatordate | grep -vx -e "$TAG" -e "native-$TAG" | head -n1)
           # One line per commit, its "feat(scope):" prefix dropped and the
           # first letter capitalised.
           tidy() { sed -E 's/^- [a-z]+(\([^)]*\))?!?: /- /; s/^- (.)/- \U\1/'; }
@@ -580,6 +582,10 @@ jobs:
       # update.json is there, so it never finds a half-uploaded one.
       - name: Publish ${{ env.TAG }}
         run: |
+          # The README's download links: the same files without the version.
+          for f in out/*.dmg out/*-setup.exe out/*.AppImage; do
+            cp "$f" "out/$(basename "$f" | sed "s/^Reel-Studio-$VERSION-/Reel-Studio-/")"
+          done
           ls -la out
           files=(out/*.zip out/*.dmg out/*.AppImage out/*.tar.gz out/*-setup.exe)
           if gh release view "$TAG" > /dev/null 2>&1; then
@@ -588,12 +594,31 @@ jobs:
             gh release upload "$TAG" out/update.json --clobber
             gh release edit "$TAG" --notes-file out/notes.md
           else
-            flags=(--latest=false)
-            [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+            flags=(--latest)
+            [ "$PRERELEASE" = true ] && flags=(--latest=false --prerelease)
             gh release create "$TAG" "${files[@]}" --draft "${flags[@]}" \
               --target "$GITHUB_SHA" \
-              --title "Reel Studio $VERSION (native)" \
+              --title "Reel Studio $VERSION" \
               --notes-file out/notes.md
             gh release upload "$TAG" out/update.json
             gh release edit "$TAG" --draft=false "${flags[@]}"
+          fi
+
+      # Installs up to 0.2.11 only look for `native-v…` releases. Give them
+      # one per version, a pre-release holding just the same update.json:
+      # its links point at the files of the `v…` release above, so those
+      # installs update onto a build that reads `v…` tags itself. Drop this
+      # step once nobody runs 0.2.11 or older.
+      - name: Publish native-${{ env.TAG }} (for older installs)
+        run: |
+          bridge="native-$TAG"
+          if gh release view "$bridge" > /dev/null 2>&1; then
+            gh release upload "$bridge" out/update.json --clobber
+            gh release edit "$bridge" --notes-file out/notes.md
+          else
+            gh release create "$bridge" --latest=false --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "Reel Studio $VERSION (update for 0.2.11 and older)" \
+              --notes-file out/notes.md
+            gh release upload "$bridge" out/update.json
           fi

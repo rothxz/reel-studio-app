@@ -18,6 +18,7 @@ mod gizmo;
 mod history;
 mod library;
 mod model;
+mod pinch;
 mod prefs;
 mod projects;
 mod selection;

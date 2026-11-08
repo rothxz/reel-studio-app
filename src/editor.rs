@@ -270,6 +270,9 @@ pub struct Editor {
     /// Timeline zoom, pixels per second.
     pub(crate) pps: f32,
     pub(crate) scroll_x: f32,
+    /// Where the playhead sat in the lanes last frame while playing
+    /// (`None` when stopped): the timeline pages when it crosses the edge.
+    pub(crate) play_follow_x: Option<f32>,
 
     pub(crate) history: History,
     pub(crate) prefs: Prefs,
@@ -487,6 +490,16 @@ impl Editor {
         })
         .detach();
 
+        let pinch = crate::pinch::listen();
+        cx.spawn(async move |this, cx| {
+            while let Ok(m) = pinch.recv().await {
+                if this.update(cx, |ed, cx| ed.on_pinch(m, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         let focus = cx.focus_handle();
         window.focus(&focus);
         let text_field = cx.new(|cx| TextInput::new("Enter text", true, cx).max_len(500));
@@ -509,6 +522,7 @@ impl Editor {
             playhead: 0,
             pps: 80.,
             scroll_x: 0.,
+            play_follow_x: None,
             history: History::default(),
             prefs: Prefs::load(),
             tool: Tool::Select,
@@ -2560,6 +2574,7 @@ impl Render for Editor {
             self.request_preview();
             window.request_animation_frame();
         }
+        self.follow_playhead();
         // A text field let go of the keyboard (Esc): the shortcuts get it back.
         if self.screen == Screen::Editor && window.focused(cx).is_none() {
             window.focus(&self.focus);

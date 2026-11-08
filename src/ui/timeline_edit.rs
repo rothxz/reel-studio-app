@@ -21,7 +21,7 @@ use gpui::{
     Context, FontWeight, Pixels, Point, ScrollWheelEvent, SharedString, Window, div, prelude::*, px,
 };
 
-use crate::editor::{Drag, Editor, PopupItem};
+use crate::editor::{Drag, Editor, PopupItem, Screen};
 use crate::model::{self, Clip, MediaItem, Micros, SECOND, Side};
 use crate::selection::Selection;
 use crate::shortcuts::Shortcut;
@@ -646,6 +646,35 @@ impl Editor {
         (end as f32 / SECOND as f32 * self.pps - width * 0.5).max(0.)
     }
 
+    /// While playing, the timeline pages like a book: when the playhead runs
+    /// off the right edge of the lanes, the view jumps so it starts again
+    /// near the left edge. Only on the crossing, so scrolling away by hand
+    /// mid-play isn't fought; starting play with the playhead out of view
+    /// brings it back once.
+    pub fn follow_playhead(&mut self) {
+        const LEAD: f32 = 24.;
+        if !self.engine.is_playing() || self.drag.is_some() {
+            self.play_follow_x = None;
+            return;
+        }
+        let Some(width) = self.measured("lanes").map(|b| f32::from(b.size.width)) else {
+            return;
+        };
+        let x = self.x_of(self.playhead);
+        let in_view = |x: f32| (0. ..width).contains(&x);
+        let page = match self.play_follow_x {
+            // Just started: page only if the playhead can't be seen.
+            None => !in_view(x),
+            Some(prev) => in_view(prev) && x >= width,
+        };
+        if page {
+            let t = self.playhead as f32 / SECOND as f32 * self.pps;
+            self.scroll_x = (t - LEAD).max(0.);
+            self.clamp_scroll();
+        }
+        self.play_follow_x = Some(self.x_of(self.playhead));
+    }
+
     pub fn clamp_scroll(&mut self) {
         self.scroll_x = self.scroll_x.clamp(0., self.max_scroll());
     }
@@ -726,6 +755,22 @@ impl Editor {
             self.hover_at(e.position.x, cx);
         }
         cx.notify();
+    }
+
+    /// A trackpad pinch step (see `pinch`): zooms around the pointer while
+    /// it's over the lanes, as the old editor's pinch did.
+    pub fn on_pinch(&mut self, magnification: f32, cx: &mut Context<Self>) {
+        let Some(b) = self.measured("lanes") else {
+            return;
+        };
+        if self.screen != Screen::Editor || !b.contains(&self.pointer) {
+            return;
+        }
+        let f = (1. + magnification).clamp(0.5, 2.);
+        self.zoom_at(self.pps * f, f32::from(self.pointer.x - b.origin.x), cx);
+        if self.hover.is_some() {
+            self.hover_at(self.pointer.x, cx);
+        }
     }
 
     // ---- hover (preview axis) --------------------------------------------

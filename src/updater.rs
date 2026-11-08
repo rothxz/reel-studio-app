@@ -1,5 +1,5 @@
 //! App updates: new versions come from the GitHub releases of the public
-//! repo (`REEL_UPDATE_REPO`), tagged `native-v<version>` by the release
+//! repo (`REEL_UPDATE_REPO`), tagged `v<version>` by the release
 //! workflow (.github/workflows/release.yml). Each one carries an
 //! `update.json` naming, per platform, a zipped app with its SHA-256.
 //!
@@ -37,9 +37,10 @@ use sha2::{Digest, Sha256};
 pub const VERSION: &str = env!("REEL_VERSION");
 /// The public repo whose releases are the update feed.
 const REPO: &str = env!("REEL_UPDATE_REPO");
-/// Release tags of this app (the same repo also holds the old shell's
-/// `v…` releases, which this app ignores).
-pub const TAG_PREFIX: &str = "native-v";
+/// Release tags of this app: `v<version>`, and `native-v<version>` on the
+/// releases before 0.2.12. The old shell's `v…` releases in the same repo
+/// carry no `update.json`, so they never count.
+pub const TAG_PREFIXES: [&str; 2] = ["v", "native-v"];
 /// The asset describing a release's downloads.
 pub const MANIFEST: &str = "update.json";
 const FIRST_CHECK: Duration = Duration::from_secs(5);
@@ -344,12 +345,17 @@ pub fn newest_release(releases: &[Release]) -> Option<(String, &Release, &Releas
         .iter()
         .filter(|r| !r.draft)
         .filter_map(|r| {
-            let version = r.tag_name.strip_prefix(TAG_PREFIX)?;
+            let version = TAG_PREFIXES
+                .iter()
+                .find_map(|p| r.tag_name.strip_prefix(p))?;
             let parsed = parse_version(version)?;
             let manifest = r.assets.iter().find(|a| a.name == MANIFEST)?;
-            Some((parsed, version.to_string(), r, manifest))
+            // The `native-v…` twin of a `v…` release (kept for older
+            // installs) has only the manifest: prefer the full release.
+            let full = r.tag_name.starts_with('v');
+            Some(((parsed, full), version.to_string(), r, manifest))
         })
-        .max_by_key(|(parsed, ..)| *parsed)
+        .max_by_key(|(key, ..)| *key)
         .map(|(_, version, r, manifest)| (version, r, manifest))
 }
 
@@ -874,28 +880,39 @@ mod tests {
     #[test]
     fn newest_release_skips_other_tags_drafts_and_missing_manifests() {
         let releases = vec![
-            // The old shell's releases share the repo.
-            release("v9.9.9", false, true),
+            // The old shell's releases share the repo, without a manifest.
+            release("v9.9.9", false, false),
+            release("desktop-v9.9.9", false, true),
             release("native-v0.2.9", false, true),
-            release("native-v0.2.12", true, true),
-            release("native-v0.2.11", false, false),
-            release("native-v0.2.10", false, true),
+            release("v0.2.12", true, true),
+            release("v0.2.11", false, false),
+            release("v0.2.10", false, true),
         ];
         let (version, newest, manifest) = newest_release(&releases).unwrap();
         assert_eq!(version, "0.2.10");
         assert!(
             manifest
                 .browser_download_url
-                .ends_with("native-v0.2.10/update.json")
+                .ends_with("v0.2.10/update.json")
         );
-        assert_eq!(manifest.url, "https://api.example.test/native-v0.2.10/1");
+        assert_eq!(manifest.url, "https://api.example.test/v0.2.10/1");
         // The platform file's API link, matched by name.
         assert_eq!(
-            api_url_for(newest, "https://example.test/native-v0.2.10/a.zip").as_deref(),
-            Some("https://api.example.test/native-v0.2.10/2")
+            api_url_for(newest, "https://example.test/v0.2.10/a.zip").as_deref(),
+            Some("https://api.example.test/v0.2.10/2")
         );
         assert!(api_url_for(newest, "https://example.test/x/b.zip").is_none());
-        assert!(newest_release(&[release("v1.0.0", false, true)]).is_none());
+        assert!(newest_release(&[release("v1.0.0", false, false)]).is_none());
+        // The earlier `native-v…` tags still count.
+        let older = [release("native-v0.2.11", false, true)];
+        assert_eq!(newest_release(&older).unwrap().0, "0.2.11");
+        // A `v…` release wins over its `native-v…` twin.
+        let twins = [
+            release("native-v0.2.12", false, true),
+            release("v0.2.12", false, true),
+            release("native-v0.2.12", false, true),
+        ];
+        assert_eq!(newest_release(&twins).unwrap().1.tag_name, "v0.2.12");
     }
 
     #[test]

@@ -2,9 +2,9 @@
 
 The desktop editor, reimplemented as a native Rust app on
 [GPUI](https://www.gpui.rs) (the UI framework behind the Zed editor), to
-replace the Electron build. Until it ships, the `v…` releases on this repo
-(marked Latest) are still the Electron build; the native app publishes
-`native-v…` pre-releases next to them (see Releases below).
+replace the Electron build. It publishes `v…` releases on this repo, marked
+Latest (`native-v…` up to 0.2.11); the Electron build's are `v0.1.x` (see
+Releases below).
 
 ![Media library, player, inspector and timeline](screenshot.jpg)
 
@@ -162,10 +162,10 @@ only run CI.
    `.dmg`.
 2. **release**: `update.json` (`packaging/update-manifest.sh`: version,
    per-platform url + SHA-256 + size), then a GitHub Release
-   `native-v<version>` on this repo, `--latest=false` and a pre-release,
-   so the Electron app's updater (which follows the release marked Latest)
-   is untouched. `update.json` is uploaded last, so the updater never sees
-   a half-uploaded release.
+   `v<version>` on this repo, marked Latest, with the `.dmg`, installer
+   and AppImages also under names without the version, so the README's
+   `releases/latest/download/…` links fetch the newest. `update.json` is
+   uploaded last, so the updater never sees a half-uploaded release.
 
 Version = Cargo.toml's `major.minor` + the run number (`0.2.0` → `0.2.57`).
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on the Rust
