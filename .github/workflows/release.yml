@@ -478,6 +478,12 @@ jobs:
           REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
         run: |
+          # Git Bash puts its coreutils `link` (hard links) ahead of MSVC's
+          # on PATH; point rustc at the one next to cl.exe.
+          msvc_link="$(dirname "$(command -v cl.exe)")/link.exe"
+          [ -f "$msvc_link" ] || { echo "::error::MSVC link.exe not found next to cl.exe"; exit 1; }
+          export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="$(cygpath -w "$msvc_link")"
+          echo "Linker: $CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
           log="$RUNNER_TEMP/build.log"
           if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} > "$log" 2>&1; then
             tail -n 3 "$log"
