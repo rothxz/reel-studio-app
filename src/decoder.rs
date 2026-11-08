@@ -52,12 +52,21 @@ const SEEK_NOISE: &[&[u8]] = &[
     b"Error constructing the frame RPS",
 ];
 
+/// The `va_list` a C callback receives. On x86_64 `va_list` is a
+/// one-element array, which decays to a pointer as a parameter (the
+/// bindings type it `[__va_list_tag; 1]`, the callback slot wants
+/// `*mut __va_list_tag`); on arm64 it's a plain pointer already.
+#[cfg(target_arch = "x86_64")]
+type VaListArg = *mut ff::ffi::__va_list_tag;
+#[cfg(not(target_arch = "x86_64"))]
+type VaListArg = ff::ffi::va_list;
+
 /// FFmpeg's own logger, minus `SEEK_NOISE`.
 unsafe extern "C" fn log_filter(
     avcl: *mut std::ffi::c_void,
     level: std::ffi::c_int,
     fmt: *const std::ffi::c_char,
-    vl: ff::ffi::va_list,
+    vl: VaListArg,
 ) {
     if !fmt.is_null() && level >= ff::ffi::AV_LOG_ERROR {
         // SAFETY: FFmpeg passes a NUL-terminated format string.
