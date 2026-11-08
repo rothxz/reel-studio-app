@@ -107,6 +107,10 @@ static float2 fx_rot(float2 p, float a) {
     return float2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
+static float fx_A(texture2d<float> fx_tex, sampler fx_smp, float2 uv) {
+    return fx_tex.sample(fx_smp, clamp(uv, 0.0, 1.0)).a;
+}
+
 static float3 fx_S(texture2d<float> fx_tex, sampler fx_smp, float2 uv) {
     return fx_straight(fx_tex.sample(fx_smp, clamp(uv, 0.0, 1.0))).rgb;
 }
@@ -215,6 +219,11 @@ static float3 fl_vignette(float3 c, float2 uv, float ar, float amt) {
 /// Rewrites a dialect body as Metal (see the module comment). `sample`
 /// is what `S(` becomes (None: a filter, which has no `S`).
 pub fn translate(body: &str, sample: Option<&str>) -> String {
+    translate_calls(body, sample, None)
+}
+
+/// `translate` with `A(` (a reveal's alpha read) rewritten to `alpha`.
+fn translate_calls(body: &str, sample: Option<&str>, alpha: Option<&str>) -> String {
     let mut out = String::with_capacity(body.len() + 64);
     let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
@@ -248,6 +257,10 @@ pub fn translate(body: &str, sample: Option<&str>) -> String {
             "S" if call && sample.is_some() => {
                 out.push_str(sample.unwrap_or_default());
                 i += 1; // the "(" is part of the replacement
+            }
+            "A" if call && alpha.is_some() => {
+                out.push_str(alpha.unwrap_or_default());
+                i += 1;
             }
             _ => out.push_str(&word),
         }
@@ -328,6 +341,32 @@ fragment float4 fx_fragment(FxVaryings in [[stage_in]], texture2d<float> src [[t
 }}
 ",
         translate(body, Some("fx_S(fx_tex, fx_smp, "))
+    )
+}
+
+/// A transition's reveal of the incoming picture: the body returns its
+/// premultiplied colour at `uv` (`S(` its straight colour, `A(` its
+/// alpha), `pr` 0–1 through the window, `dur` the window in seconds.
+pub fn reveal(body: &str) -> String {
+    format!(
+        "{COMMON}{EFFECT_HELPERS}
+static float4 an_body(texture2d<float> fx_tex, sampler fx_smp, float2 uv, float time, float ar,
+                      float pr, float dur) {{
+{}
+}}
+
+fragment float4 fx_fragment(FxVaryings in [[stage_in]], texture2d<float> src [[texture(0)]],
+                            sampler smp [[sampler(0)]], constant FxUniforms &u [[buffer(0)]]) {{
+    float4 c = an_body(src, smp, in.uv, u.time, u.ar, u.pr, u.dur);
+    float a = clamp(c.a, 0.0, 1.0);
+    return float4(min(max(c.rgb, float3(0.0)), float3(a)), a);
+}}
+",
+        translate_calls(
+            body,
+            Some("fx_S(fx_tex, fx_smp, "),
+            Some("fx_A(fx_tex, fx_smp, ")
+        )
     )
 }
 

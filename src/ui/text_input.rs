@@ -176,6 +176,13 @@ impl TextInput {
         &self.content
     }
 
+    /// Where the caret is, in characters.
+    pub fn caret_chars(&self) -> usize {
+        self.content[..self.cursor().min(self.content.len())]
+            .chars()
+            .count()
+    }
+
     pub fn is_focused(&self, window: &Window) -> bool {
         self.focus.is_focused(window)
     }

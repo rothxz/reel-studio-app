@@ -110,6 +110,8 @@ icons! {
     Undo => (MDI, 0xf17b3),
     Redo => (MDI, 0xf17b7),
     Split => (MDI, 0xf00fb),
+    MergeUp => (MDI, 0xf0795),
+    MergeDown => (MDI, 0xf0792),
     Blade => (MDI, 0xf00d5),
     Cursor => (MDI, 0xf01bf),
     DeleteLeft => (MDI, 0xf0325),

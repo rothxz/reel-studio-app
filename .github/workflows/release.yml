@@ -174,7 +174,8 @@ jobs:
           # Signing is optional; later steps only learn whether it's set.
           if [ -n "$MAC_CSC_LINK" ]; then echo "sign=true" >> "$GITHUB_OUTPUT"; fi
 
-      # Only the folders build.rs reads: the engine core and the filter data.
+      # Only the folders build.rs reads: the engine core, the filter data and
+      # the UI dictionaries.
       - name: Check out the engine (private)
         if: steps.secrets.outputs.engine == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -185,7 +186,21 @@ jobs:
           sparse-checkout: |
             modules/video-engine/cpp
             src/data
+            src/i18n/locales
           persist-credentials: false
+
+      # build.rs compiles the UI languages in from these; without them the
+      # app builds fine but English only, so stop here instead.
+      - name: Check the language dictionaries
+        if: steps.secrets.outputs.engine == 'true'
+        shell: bash
+        run: |
+          for l in en km vi zh id; do
+            if [ ! -f "reel-studio/src/i18n/locales/$l.ts" ]; then
+              echo "::error::reel-studio/src/i18n/locales/$l.ts is missing: the release would be English only"
+              exit 1
+            fi
+          done
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -321,7 +336,8 @@ jobs:
           fi
           if [ -n "$REEL_STUDIO_TOKEN" ]; then echo "engine=true" >> "$GITHUB_OUTPUT"; fi
 
-      # Only the folders build.rs reads: the engine core and the filter data.
+      # Only the folders build.rs reads: the engine core, the filter data and
+      # the UI dictionaries.
       - name: Check out the engine (private)
         if: steps.secrets.outputs.engine == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -332,7 +348,21 @@ jobs:
           sparse-checkout: |
             modules/video-engine/cpp
             src/data
+            src/i18n/locales
           persist-credentials: false
+
+      # build.rs compiles the UI languages in from these; without them the
+      # app builds fine but English only, so stop here instead.
+      - name: Check the language dictionaries
+        if: steps.secrets.outputs.engine == 'true'
+        shell: bash
+        run: |
+          for l in en km vi zh id; do
+            if [ ! -f "reel-studio/src/i18n/locales/$l.ts" ]; then
+              echo "::error::reel-studio/src/i18n/locales/$l.ts is missing: the release would be English only"
+              exit 1
+            fi
+          done
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
@@ -451,7 +481,21 @@ jobs:
           sparse-checkout: |
             modules/video-engine/cpp
             src/data
+            src/i18n/locales
           persist-credentials: false
+
+      # build.rs compiles the UI languages in from these; without them the
+      # app builds fine but English only, so stop here instead.
+      - name: Check the language dictionaries
+        if: steps.secrets.outputs.engine == 'true'
+        shell: bash
+        run: |
+          for l in en km vi zh id; do
+            if [ ! -f "reel-studio/src/i18n/locales/$l.ts" ]; then
+              echo "::error::reel-studio/src/i18n/locales/$l.ts is missing: the release would be English only"
+              exit 1
+            fi
+          done
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
