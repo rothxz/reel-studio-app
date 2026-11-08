@@ -11,9 +11,9 @@ Timeline editing, trending effects, auto captions and one-click background remov
 [![Latest release](https://img.shields.io/github/v/release/rothxz/reel-studio-app?label=desktop&color=111111)](https://github.com/rothxz/reel-studio-app/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/rothxz/reel-studio-app/total?color=111111)](https://github.com/rothxz/reel-studio-app/releases)
 
-[![macOS](https://img.shields.io/badge/macOS-Download-1f1f1f?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-Download-1f1f1f?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
-[![Linux](https://img.shields.io/badge/Linux-Download-1f1f1f?style=for-the-badge&logo=linux&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-Download-1f1f1f?style=for-the-badge&logo=apple&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-mac-arm64.dmg)
+[![Windows](https://img.shields.io/badge/Windows-Download-1f1f1f?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-windows-x64-setup.exe)
+[![Linux](https://img.shields.io/badge/Linux-Download-1f1f1f?style=for-the-badge&logo=linux&logoColor=white&labelColor=000000)](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-x64.AppImage)
 <br />
 [![Google Play](https://img.shields.io/badge/Google_Play-Get_it-1f1f1f?style=for-the-badge&logo=googleplay&logoColor=white&labelColor=000000)](https://play.google.com/store/apps/details?id=com.reelstudio.app)
 [![App Store](https://img.shields.io/badge/App_Store-In_review-1f1f1f?style=for-the-badge&logo=appstore&logoColor=white&labelColor=000000)](#download)
@@ -28,16 +28,17 @@ Timeline editing, trending effects, auto captions and one-click background remov
 
 ## Download
 
-| Platform                     | Get it                                                                                                     | Notes                                        |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **macOS** (Apple Silicon)    | [`Reel-Studio-<version>-mac-arm64.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest)         | Signed & notarized by Apple                  |
-| **macOS** (Intel)            | [`Reel-Studio-<version>-mac-x64.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest)           | Signed & notarized by Apple                  |
-| **Windows** 10 / 11 (64-bit) | [`Reel-Studio-<version>-win-x64.exe`](https://github.com/rothxz/reel-studio-app/releases/latest)           | Installer; see [first launch](#first-launch) |
-| **Linux** (x86_64)           | [`Reel-Studio-<version>-linux-x86_64.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest) | Portable AppImage, no install                |
+| Platform                     | Get it                                                       | Notes                                        |
+| ---------------------------- | ------------------------------------------------------------ | -------------------------------------------- |
+| **macOS** (Apple Silicon)    | [Download `.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-mac-arm64.dmg)                 | Signed & notarized by Apple                  |
+| **macOS** (Intel)            | [Download `.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-mac-x64.dmg)                   | Signed & notarized by Apple                  |
+| **Windows** 10 / 11 (64-bit) | [Download installer](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-windows-x64-setup.exe)      | See [first launch](#first-launch)            |
+| **Linux** (x86_64)           | [Download `.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-x64.AppImage)       | Portable AppImage, no install                |
+| **Linux** (ARM64)            | [Download `.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-arm64.AppImage)     | Portable AppImage, no install                |
 | **Android**                  | [Google Play](https://play.google.com/store/apps/details?id=com.reelstudio.app)                            | Available now                                |
 | **iPhone**                   | App Store                                                                                                  | In review, coming soon                       |
 
-The desktop apps update themselves: when a new version is out, Reel Studio offers to download it and restart.
+Portable `.zip` / `.tar.gz` builds and older versions are on [All releases](https://github.com/rothxz/reel-studio-app/releases). The desktop apps update themselves: when a new version is out, Reel Studio offers to download it and restart.
 
 ## On your phone
 
@@ -101,8 +102,8 @@ English · ខ្មែរ (Khmer) · Tiếng Việt · 简体中文 · Bahasa I
 - **Linux**: make the AppImage executable, then run it:
 
   ```sh
-  chmod +x Reel-Studio-*-linux-x86_64.AppImage
-  ./Reel-Studio-*-linux-x86_64.AppImage
+  chmod +x Reel-Studio-linux-x64.AppImage
+  ./Reel-Studio-linux-x64.AppImage
   ```
 
 ### System requirements

@@ -67,6 +67,8 @@ src/main.rs        window, fonts, app menu (built from the shortcut table)
 src/editor.rs      Editor state: document, edits (+ magnet), undo, playback,
                    preview, drags, panel layout, projects session, autosave
 src/shortcuts.rs   the shortcut table → key bindings, menu, tooltips, dialog
+src/pinch.rs       trackpad pinch → timeline zoom (AppKit magnify
+                   monitor; gpui drops the event)
 src/history.rs     undo / redo (document snapshots, coalesced per gesture)
 src/model.rs       Project document (serde): same JSON as the app; unknown fields
                    kept in `extra`; clip edits + `with_magnet`

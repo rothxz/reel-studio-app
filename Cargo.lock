@@ -4735,6 +4735,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
+ "block",
  "cc",
  "chrono",
  "cosmic-text",

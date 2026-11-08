@@ -40,7 +40,7 @@ isn't listed.
   menus. *No blocking progress dialog yet.*
 - [~] Auto-update + installers to replace electron-builder /
   electron-updater: macOS done (dmg + zip, signed / notarized when the
-  secrets are set, `native-v…` releases from `release.yml`; check on
+  secrets are set, `v…` releases from `release.yml`; check on
   launch + every 4 h, Download, Restart now / Later installs on quit).
   *Windows, Linux to do; moving Electron users onto the native app is
   still to decide.*
@@ -437,8 +437,11 @@ isn't listed.
 - [x] Sub-rows: clips overlapping on a lane stack in rows (`assign_rows`)
 - [x] Vertical scroll of the lane stack (wheel) with a scrollbar while it
   overflows; ⇧ + wheel sideways; ⌘ / ctrl + wheel zooms around the pointer;
-  ⌘= / ⌘- zoom around the playhead; ⇧Z fits (80 px left after the end)
-- [x] Playhead: shield on the ruler + line; timecode readout top left
+  ⌘= / ⌘- zoom around the playhead; ⇧Z fits (80 px left after the end);
+  a trackpad pinch over the lanes zooms around the pointer (macOS: an
+  AppKit magnify monitor, `src/pinch.rs`, since gpui drops the event)
+- [x] Playhead: shield on the ruler + line; timecode readout top left;
+  while playing the view pages when the playhead runs off the right edge
 - [~] Track headers: lane icon, Lock / Hide / Mute (lanes with sound) over
   all the lane's tracks, one undo step each; locking drops the lane's clips
   from the selection; "…" → Select all on track / Delete track. The

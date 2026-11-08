@@ -31,6 +31,8 @@ pollster = { version = "0.4", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.29"
 objc = "0.2"
+# The trackpad pinch monitor (src/pinch.rs): an AppKit event block.
+block = "0.1"
 # The AI agent's API keys, kept in the login keychain.
 security-framework = "3"
 
