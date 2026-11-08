@@ -19,6 +19,7 @@ fn main() {
     app_inputs();
     release_inputs();
     static_ffmpeg();
+    windows_resources();
     if std::env::var_os("CARGO_FEATURE_CPP_ENGINE").is_none() {
         return;
     }
@@ -33,6 +34,11 @@ fn main() {
         .include(dir.join("include"))
         .file("engine-shim/reel_engine.cpp")
         .warnings(false);
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // M_PI and friends (glibc and Apple's libc define them anyway), and
+        // the sources' UTF-8 comments read as UTF-8 whatever the code page.
+        build.define("_USE_MATH_DEFINES", None).flag("/utf-8");
+    }
     for entry in std::fs::read_dir(dir.join("src")).expect("REEL_ENGINE_DIR/src") {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "cpp") {
@@ -120,31 +126,58 @@ fn release_inputs() {
     }
 }
 
-/// A static FFmpeg (FFMPEG_DIR from packaging/macos/build-ffmpeg.sh, the
+/// A static FFmpeg (FFMPEG_DIR from packaging/<os>/build-ffmpeg.sh, the
 /// release build): ffmpeg-sys-next links its libraries, but not what they
 /// need from the system, which FFmpeg lists in its pkg-config files
-/// (frameworks, -lz, -lbz2…). A shared FFmpeg (Homebrew, development)
-/// needs nothing here.
+/// (frameworks, -lz, -lbz2, mfplat.lib…). A shared FFmpeg (Homebrew, a
+/// distro's, development) needs nothing here.
 fn static_ffmpeg() {
     println!("cargo:rerun-if-env-changed=FFMPEG_DIR");
     let Some(dir) = std::env::var_os("FFMPEG_DIR").map(PathBuf::from) else {
         return;
     };
     let lib = dir.join("lib");
-    if !lib.join("libavcodec.a").exists() || lib.join("libavcodec.dylib").exists() {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let is_static = if os == "windows" {
+        // build-ffmpeg.sh names the static libraries avcodec.lib; a shared
+        // build has import libraries there and DLLs in bin/.
+        lib.join("avcodec.lib").exists()
+            && !std::fs::read_dir(dir.join("bin")).is_ok_and(|d| {
+                d.flatten()
+                    .any(|e| e.path().extension().is_some_and(|x| x == "dll"))
+            })
+    } else {
+        lib.join("libavcodec.a").exists()
+            && !lib.join("libavcodec.dylib").exists()
+            && !lib.join("libavcodec.so").exists()
+    };
+    if !is_static {
         return;
     }
+    const LIBS: [&str; 7] = [
+        "avdevice",
+        "avfilter",
+        "avformat",
+        "avcodec",
+        "swresample",
+        "swscale",
+        "avutil",
+    ];
+    if os == "linux" {
+        // GNU ld takes archives in order: FFmpeg's own, users first, then
+        // the system libraries they need (the -l flags below). Linked here
+        // so they come before those; ffmpeg-sys-next's later copies are
+        // no-ops.
+        println!("cargo:rustc-link-search=native={}", lib.display());
+        for name in LIBS {
+            if lib.join(format!("lib{name}.a")).exists() {
+                println!("cargo:rustc-link-lib=static={name}");
+            }
+        }
+    }
     let mut seen = std::collections::HashSet::new();
-    for pc in [
-        "libavdevice",
-        "libavfilter",
-        "libavformat",
-        "libavcodec",
-        "libswresample",
-        "libswscale",
-        "libavutil",
-    ] {
-        let path = lib.join("pkgconfig").join(format!("{pc}.pc"));
+    for name in LIBS {
+        let path = lib.join("pkgconfig").join(format!("lib{name}.pc"));
         let Some(text) = watched_read(&path) else {
             continue;
         };
@@ -159,9 +192,13 @@ fn static_ffmpeg() {
         while let Some(word) = words.next() {
             let link = if word == "-framework" {
                 words.next().map(|f| format!("framework={f}"))
-            } else if let Some(name) = word.strip_prefix("-l") {
-                // FFmpeg's own libraries come from ffmpeg-sys-next.
-                (!name.starts_with("av") && !name.starts_with("sw")).then(|| name.to_string())
+            } else if let Some(name) = word.strip_prefix("-l").or_else(|| {
+                word.strip_suffix(".lib")
+                    .filter(|w| !w.contains(['/', '\\']))
+            }) {
+                // FFmpeg's own libraries come from ffmpeg-sys-next (by name:
+                // Windows' avrt.lib is a system one).
+                (!LIBS.contains(&name)).then(|| name.to_string())
             } else {
                 None
             };
@@ -172,6 +209,85 @@ fn static_ffmpeg() {
             }
         }
     }
+}
+
+/// Windows: the manifest (per-monitor DPI, which gpui expects; UTF-8),
+/// the app icon and the version shown in Explorer and Task Manager, built
+/// into the .exe. The icon is the 256 px app icon as a PNG inside an .ico.
+fn windows_resources() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let png_path = root.join("docs/images/app-icon-rounded.png");
+    let manifest = root.join("packaging/windows/reel-studio.manifest");
+    println!("cargo:rerun-if-changed={}", png_path.display());
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let png = std::fs::read(&png_path).expect("docs/images/app-icon-rounded.png");
+    // ICONDIR + one ICONDIRENTRY (0 = 256 px), then the PNG.
+    let mut ico = vec![0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0];
+    ico.extend((png.len() as u32).to_le_bytes());
+    ico.extend(22u32.to_le_bytes());
+    ico.extend(&png);
+    let ico_path = out.join("reel-studio.ico");
+    std::fs::write(&ico_path, ico).unwrap();
+
+    let version = std::env::var("REEL_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap());
+    let mut parts: Vec<u32> = version
+        .split(['.', '-', '+'])
+        .take(3)
+        .map(|p| p.parse().unwrap_or(0))
+        .collect();
+    parts.resize(4, 0);
+    let numeric = parts
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    // rc.exe takes forward slashes, and backslashes doubled in strings.
+    let path = |p: &Path| p.display().to_string().replace('\\', "/");
+    let rc = format!(
+        r#"#include <winver.h>
+1 24 "{manifest}"
+1 ICON "{ico}"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION {numeric}
+PRODUCTVERSION {numeric}
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Reel Studio"
+      VALUE "FileDescription", "Reel Studio"
+      VALUE "FileVersion", "{version}"
+      VALUE "InternalName", "reel-studio"
+      VALUE "OriginalFilename", "reel-studio.exe"
+      VALUE "ProductName", "Reel Studio"
+      VALUE "ProductVersion", "{version}"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#,
+        manifest = path(&manifest),
+        ico = path(&ico_path),
+    );
+    let rc_path = out.join("reel-studio.rc");
+    std::fs::write(&rc_path, rc).unwrap();
+    #[cfg(windows)]
+    embed_resource::compile(&rc_path, embed_resource::NONE)
+        .manifest_required()
+        .unwrap();
 }
 
 fn watched_read(path: &Path) -> Option<String> {

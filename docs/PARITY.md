@@ -55,9 +55,10 @@ isn't listed.
 - [x] AI agent toggle (opens the agent panel in the inspector slot),
   remembered across launches
 - [x] Shortcuts button → Shortcuts dialog (⌘/), with tooltip + key
-- [x] Export resolution ▾ (720p / 1080p / 4K, remembered)
-- [~] Export button (⌘E). *Says export isn't available yet: no desktop
-  encoder (see Export).*
+- [x] Export resolution ▾ (720p / 1080p / 4K, remembered) and frame rate
+  (24 / 30 / 60; the project's own, snapped, until one is picked)
+- [x] Export button (⌘E): save dialog (last folder, else Movies), then the
+  export screen (see Export).
 
 ## Browser (left)
 
@@ -539,11 +540,33 @@ isn't listed.
 
 ## Export
 
-- [ ] Engine export on desktop: decoder + compositor + encoder backends
-  (macOS: AVFoundation/Metal/VideoToolbox from the iOS engine; others:
-  FFmpeg + GL/wgpu)
-- [ ] Export dialog: resolution, fps, quality, progress, cancel, live
-  preview, reveal file
+- [x] Export pipeline in Rust (`src/export.rs`), on its own thread, the
+  player's own path made frame-exact: engine layers at each frame time →
+  a `FrameReader` per layer (exact source time; the preview's decode
+  server runs on it too), text drawn at the output size, sticker frames,
+  Background photo → the GPU compositor (Metal / wgpu) on a canvas the
+  output's size → H.264 (VideoToolbox, Media Foundation, x264 /
+  openh264 when present, MPEG-4 last) + AAC 48 kHz stereo (the playback
+  mixer run offline, `audio::TimelineMix`) in an MP4 (`src/encode.rs`,
+  `+faststart`). Bitrate as the engine's rule (2.5 / 8 / 16 Mbps at
+  1080p30 for 720p / 1080p / 4K, scaled by pixels × fps, 0.5–50 Mbps).
+  Missing effect rows / packages and stickers are fetched as frames need
+  them. Written to `<file>.part`, renamed when whole; removed on cancel
+  or failure. Tested end to end (`exports_a_clip`).
+- [x] Export screen (`ui/export.rs`): percent title, progress ring round a
+  frame of the project's shape with the frame just written, resolution ·
+  size · fps; Cancel (✕, Esc, button) asks "Stop exporting?"; done: Done,
+  Show in Finder, Play video, time taken; failed / cancelled: Retry,
+  Close. Monochrome (the old screen's orange ring is shell accent).
+- [ ] Linux release builds have no LGPL H.264 encoder (FFmpeg ships
+  none): they write MPEG-4 part 2. Build libopenh264 (BSD) into
+  `packaging/linux/build-ffmpeg.sh` for H.264.
+- [ ] Bitrate field (custom Mbps) and estimated size from the old Export
+  settings sheet.
+- [ ] Not exported yet because the player doesn't draw them either:
+  transitions, drawings, Background patterns, volume keyframes, sound of
+  reversed / frozen clips.
+- [ ] An export is lost if the app quits mid-way (its `.part` stays).
 
 ## Shortcuts (from `desktopShortcuts.ts`)
 
@@ -565,7 +588,7 @@ isn't listed.
 | Preview axis / snapping / main magnet | S / N / P | [x] |
 | Select tool / split tool | A / B | [x] |
 | Fullscreen | ⌘⇧F | [x] |
-| Export | ⌘E | [~] toast until export exists |
+| Export | ⌘E | [x] |
 | Shortcuts dialog | ⌘/ | [x] |
 
 All of them come from one table (`src/shortcuts.rs`): key bindings, menu
@@ -582,7 +605,7 @@ items, tooltips and the dialog.
 4. Browser: Transitions (picker + the compositor's transition passes),
    Captions (upload .srt/.vtt, caption styles; auto captions need a
    speech model), Voiceover, Text templates.
-5. Export.
+5. Export leftovers (see Export): H.264 on Linux, custom bitrate.
 
 ## Platform
 

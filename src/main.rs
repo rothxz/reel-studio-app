@@ -1,3 +1,6 @@
+// A release build on Windows is a GUI program: no console window beside it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod adjust;
 mod agent;
 mod assets;
@@ -8,7 +11,9 @@ mod crop;
 mod decoder;
 mod editor;
 mod effects;
+mod encode;
 mod engine;
+mod export;
 mod gizmo;
 mod history;
 mod library;
@@ -52,6 +57,7 @@ fn main() {
             if let Err(e) = cx.text_system().add_fonts(theme::embedded_fonts()) {
                 eprintln!("bundled fonts didn't load: {e}");
             }
+            agent::keys::load(cx);
             cx.bind_keys(shortcuts::key_bindings());
             cx.bind_keys(ui::text_input::bindings());
             cx.bind_keys([
@@ -153,6 +159,8 @@ fn main() {
                         traffic_light_position: Some(point(px(12.), px(12.))),
                     }),
                     window_min_size: Some(size(px(960.), px(600.))),
+                    // Linux: the window's class, matching reel-studio.desktop.
+                    app_id: Some("reel-studio".into()),
                     ..Default::default()
                 },
                 |window, cx| {
@@ -173,6 +181,16 @@ fn main() {
                 },
             )
             .unwrap();
+            // Off macOS an app without windows has nothing left to show
+            // (no menu bar, no dock): closing the window quits.
+            if !cfg!(target_os = "macos") {
+                cx.on_window_closed(|cx| {
+                    if cx.windows().is_empty() {
+                        cx.quit();
+                    }
+                })
+                .detach();
+            }
             cx.activate(true);
         });
 }

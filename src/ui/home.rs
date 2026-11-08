@@ -20,6 +20,7 @@ use crate::projects::{self, Summary};
 use crate::theme;
 use crate::ui::icons::Icon;
 use crate::ui::widgets::mono;
+use crate::ui::window_chrome;
 
 const SIDEBAR_WIDTH: f32 = 220.;
 /// The page's side padding.
@@ -52,33 +53,35 @@ pub fn greeting() -> &'static str {
     }
 }
 
-/// The local hour, from `date` (std has no time zones; this runs once per
-/// visit to the list, not per frame).
+/// The local hour (std has no time zones).
 fn local_hour() -> u32 {
-    std::process::Command::new("date")
-        .arg("+%H")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(12)
+    use chrono::Timelike as _;
+    chrono::Local::now().hour()
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// A title-bar strip: double-click zooms the window, like a native one.
-fn title_strip(id: &'static str) -> gpui::Stateful<gpui::Div> {
+/// A title-bar strip: its empty space moves the window (double-click
+/// zooms it), with what goes before (the app menu) and after (the window's
+/// buttons) where the system draws none.
+fn title_strip(
+    id: &'static str,
+    lead: Option<gpui::AnyElement>,
+    trail: Option<gpui::AnyElement>,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
         .h(px(HEADER_HEIGHT))
-        .on_click(|e, window, _| {
-            if e.click_count() == 2 {
-                window.titlebar_double_click();
-            }
-        })
+        .flex()
+        .items_center()
+        .when_some(lead, |d, lead| d.pl(px(10.)).child(lead))
+        .child(window_chrome::drag_area(gpui::SharedString::from(format!(
+            "{id}-drag"
+        ))))
+        .children(trail)
 }
 
 impl Editor {
@@ -91,7 +94,7 @@ impl Editor {
             .flex()
             .bg(theme::page_bg())
             .child(self.home_sidebar(window.is_fullscreen(), cx))
-            .child(self.home_page(cx))
+            .child(self.home_page(window, cx))
             .child(drop_overlay())
     }
 
@@ -107,8 +110,17 @@ impl Editor {
             .flex_col()
             .border_r_1()
             .border_color(theme::hairline())
-            // Clear of the traffic lights (none in full screen).
-            .child(title_strip("home-sidebar-titlebar").when(full_screen, |d| d.h(px(6.))))
+            // Clear of the traffic lights (none in full screen), or the app
+            // menu where there's no menu bar.
+            .child(if window_chrome::draws_menu() {
+                title_strip(
+                    "home-sidebar-titlebar",
+                    Some(self.render_menu_button(cx).into_any_element()),
+                    None,
+                )
+            } else {
+                title_strip("home-sidebar-titlebar", None, None).when(full_screen, |d| d.h(px(6.)))
+            })
             .child(
                 div()
                     .px(px(10.))
@@ -160,7 +172,7 @@ impl Editor {
 
     // ---- page ---------------------------------------------------------------
 
-    fn home_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn home_page(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_home = self.home_tab == HomeTab::Edit;
         let count = self.home_projects.len();
         let drafts = format!(
@@ -224,7 +236,12 @@ impl Editor {
             .h_full()
             .flex()
             .flex_col()
-            .child(title_strip("home-titlebar"))
+            .child(title_strip(
+                "home-titlebar",
+                None,
+                window_chrome::draws_controls(window)
+                    .then(|| self.render_window_controls(window, cx).into_any_element()),
+            ))
             // Greeting (or the page title) + drafts count.
             .child(
                 div()

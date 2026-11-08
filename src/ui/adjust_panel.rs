@@ -26,19 +26,12 @@ impl Editor {
     /// keyframed sliders evaluated, a held slider's live value on the
     /// selected clip.
     pub(crate) fn adjust_matrix_at(&self, clip: &Clip, t: Micros) -> Option<[f32; 20]> {
-        if clip.kind != "video" && clip.kind != "image" {
-            return None;
-        }
         let selected = self.selected.primary() == Some(clip.id.as_str());
         let local = t - clip.timeline_start;
-        let values = adjust::values(|key| {
-            let c = adjust::control(key).expect("a control");
-            match self.live_value {
-                Some((k, v)) if selected && k == c.slider => v,
-                _ => self.property_at(clip, c.property, local).unwrap_or(0.),
-            }
-        });
-        crate::engine::adjust_color_matrix(&values)
+        adjust::matrix(clip, |c| match self.live_value {
+            Some((k, v)) if selected && k == c.slider => v,
+            _ => self.property_at(clip, c.property, local).unwrap_or(0.),
+        })
     }
 
     pub fn render_adjust_panel(&self, clip: &Clip, cx: &mut Context<Self>) -> AnyElement {

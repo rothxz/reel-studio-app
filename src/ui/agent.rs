@@ -382,7 +382,13 @@ impl Editor {
             return;
         };
         if self.history.undo_len() != after {
-            self.toast("Edited since: undo by hand (⌘Z)", cx);
+            self.toast(
+                format!(
+                    "Edited since: undo by hand ({})",
+                    crate::shortcuts::hint(crate::shortcuts::Shortcut::Undo)
+                ),
+                cx,
+            );
             return;
         }
         for _ in before..after {
@@ -544,7 +550,7 @@ impl Editor {
         if key.is_empty() {
             return;
         }
-        match keys::save(id, &key) {
+        match keys::save(id, &key, cx) {
             Ok(()) => {
                 self.agent_ui.key.update(cx, |i, cx| i.set_text("", cx));
                 self.agent_connect(cx);
@@ -556,7 +562,7 @@ impl Editor {
 
     fn agent_remove_key(&mut self, cx: &mut Context<Self>) {
         let id = preset(&self.agent.settings.preset).id;
-        let _ = keys::save(id, "");
+        let _ = keys::save(id, "", cx);
         self.agent.models.clear();
         cx.notify();
     }
@@ -858,7 +864,7 @@ impl Editor {
                         |_, _, cx| {
                             let dir = skills::folder();
                             let _ = std::fs::create_dir_all(&dir);
-                            cx.open_url(&format!("file://{}", dir.display()));
+                            cx.open_with_system(&dir);
                         },
                     ),
                 ),

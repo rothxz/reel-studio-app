@@ -1,2 +1,4 @@
 /target
 /tools/winid
+/.ffmpeg
+/dist

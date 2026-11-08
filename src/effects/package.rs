@@ -119,7 +119,7 @@ pub enum Lookup<T> {
 }
 
 /// The packages this session has, by key.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Packages {
     effects: HashMap<String, Arc<EffectPackage>>,
     filters: HashMap<String, Arc<str>>,

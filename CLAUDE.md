@@ -89,7 +89,12 @@ src/library.rs     online libraries: stickers / GIFs + music through the
 src/stickers.rs    sticker / GIF frames for the player (decode, loop)
 src/text_render.rs text clips drawn as pictures (cosmic-text + tiny-skia)
 src/audio.rs       sound out (cpal): timeline mixer in step with the
-                   engine, library previews
+                   engine (`TimelineMix`, also run offline by export),
+                   library previews
+src/encode.rs      MP4 writer: H.264 (VideoToolbox / Media Foundation /
+                   x264 / openh264, MPEG-4 last) + AAC (export, agent)
+src/export.rs      export thread: frame-exact layers → GPU compositor →
+                   encoder, timeline sound; `.part` renamed when whole
 src/agent/         the AI agent: providers, keys (keychain), llm (Ollama /
                    OpenAI-style / Anthropic dialects, vision), snapshot
                    (the project as the model reads it, short ids), skills
@@ -119,7 +124,8 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    crop (the Crop dialog), layers (Arrange layers),
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
-                   dialogs (popup, confirm, shortcuts), agent (the AI
+                   dialogs (popup, confirm, shortcuts), export (save
+                   dialog + the export screen), agent (the AI
                    agent panel + its turn loop), widgets,
                    icons (icon fonts served as SVG)
 engine-shim/       C ABI over videoengine::Engine (+ FindActiveClips etc.)
@@ -218,10 +224,12 @@ thumbnails, waveform, audio out), and the editor state out of `editor.rs`.
 - Clip times: `ClipOffsetToSourceTime` (speed, speed curve, reverse,
   freeze). A clip plays `[sourceStart, sourceStart + timelineDuration ×
   speed]`; `sourceDuration` is the media's length, not the segment.
-- The engine has no desktop decoder/compositor/encoder yet; export needs
-  them (macOS: the iOS AVFoundation/VideoToolbox/Metal files are nearly
-  portable; only `AVFoundationDecoder.mm` and `VideoEngineBridge.mm` use
-  UIKit).
+- Export doesn't use the engine's `StartExport` (it has no desktop
+  backends): `src/export.rs` asks the engine for layers at each frame time
+  and draws them with our own decoder, GPU compositor and FFmpeg encoder.
+  Anything the player learns to draw (transitions, drawings…) must be
+  drawn there too: both build on `effects::stack` and
+  `engine::picture_layers`.
 - Effects and filters are data: a package's `body` is GLSL-flavoured
   (`vecN`, `S(uv)`, `MOD(`, `ATAN2(`); `effects/msl.rs` rewrites it to
   Metal. Write the `fx_` / `fl_` helpers ourselves (never copy the app's

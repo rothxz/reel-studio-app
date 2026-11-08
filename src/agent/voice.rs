@@ -6,8 +6,9 @@
 //! - **OpenAI's speech model** with the user's OpenAI key (natural voices
 //!   that take a tone: "friendly teacher, upbeat");
 //! - **Gemini's speech model** with the user's Gemini key (same idea);
-//! - **the system's own speech** (`say` on macOS): offline, always there,
-//!   robotic: the last resort.
+//! - **the system's own speech** (`say` on macOS, the Windows speech
+//!   engine, `espeak-ng` on Linux: `os_voice`): offline, robotic: the
+//!   last resort.
 //!
 //! A line is spoken once and kept in `<data>/agent/voice/` under a hash of
 //! what made it (engine, voice, tone, words), so asking again is instant
@@ -17,6 +18,7 @@
 //! is what captions are timed against (`captions::chunks`).
 
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::time::Duration;
 
@@ -24,6 +26,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[cfg(not(target_os = "macos"))]
+use super::os_voice;
 use super::{keys, local_voice};
 use crate::model::Micros;
 
@@ -152,9 +156,11 @@ pub const KOKORO_VOICES: &[(&str, bool, bool)] = &[
 
 /// System voices worth a narration, best first; the novelty ones (Bells,
 /// Bubbles, Zarvox…) never get picked.
+#[cfg(any(target_os = "macos", test))]
 const SYSTEM_FEMALE: &[&str] = &[
     "Ava", "Zoe", "Allison", "Susan", "Samantha", "Flo", "Karen", "Moira", "Shelley", "Sandy",
 ];
+#[cfg(any(target_os = "macos", test))]
 const SYSTEM_MALE: &[&str] = &[
     "Evan", "Nathan", "Tom", "Daniel", "Reed", "Eddy", "Rocko", "Alex", "Aaron",
 ];
@@ -162,6 +168,12 @@ const SYSTEM_MALE: &[&str] = &[
 /// Speaking rate for the system voice (words a minute): a little brisk,
 /// as short-form narration is.
 const SYSTEM_RATE: u32 = 182;
+/// What the system voice writes: AIFF from `say`, WAV elsewhere.
+const SYSTEM_EXT: &str = if cfg!(target_os = "macos") {
+    "aiff"
+} else {
+    "wav"
+};
 
 /// What to say and how.
 #[derive(Clone, Debug, Default)]
@@ -336,7 +348,7 @@ pub fn speak(req: &Request) -> Result<Speech> {
         Engine::System => {
             let voice = system_voice(req.voice.as_deref())?;
             let path = voice_dir().join(format!(
-                "{}.aiff",
+                "{}.{SYSTEM_EXT}",
                 hash(&["system", &voice, &SYSTEM_RATE.to_string(), text])
             ));
             if !path.exists() {
@@ -494,6 +506,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[cfg(target_os = "macos")]
 /// The system's installed voices: (name as `say` takes it, locale).
 pub fn system_voices() -> Vec<(String, String)> {
     let Ok(out) = Command::new("say").args(["-v", "?"]).output() else {
@@ -505,6 +518,7 @@ pub fn system_voices() -> Vec<(String, String)> {
         .collect()
 }
 
+#[cfg(any(target_os = "macos", test))]
 /// "Samantha (English (US))   en_US    # Hello…" → (name, "en_US").
 fn parse_voice_line(line: &str) -> Option<(String, String)> {
     let head = line.split('#').next()?.trim_end();
@@ -516,6 +530,7 @@ fn parse_voice_line(line: &str) -> Option<(String, String)> {
     Some((name.trim().to_string(), locale.to_string()))
 }
 
+#[cfg(any(target_os = "macos", test))]
 /// The plain name of a listed voice ("Samantha (English (US))" →
 /// "Samantha"), with its quality tag kept ("Ava (Premium)").
 fn base_name(listed: &str) -> &str {
@@ -523,17 +538,25 @@ fn base_name(listed: &str) -> &str {
 }
 
 /// The system voice to use for `wanted` (a name, "female", "male").
+#[cfg(not(target_os = "macos"))]
 fn system_voice(wanted: Option<&str>) -> Result<String> {
-    if !cfg!(target_os = "macos") {
-        bail!(
-            "No voice: this system has no speech built in. Save an OpenAI or Gemini key in the agent's setup."
-        );
-    }
+    os_voice::system_voice(wanted)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_speech(text: &str, voice: &str, path: &Path) -> Result<()> {
+    os_voice::speak(text, voice, path)
+}
+
+/// The system voice to use for `wanted` (a name, "female", "male").
+#[cfg(target_os = "macos")]
+fn system_voice(wanted: Option<&str>) -> Result<String> {
     let voices = system_voices();
     pick_system_voice(&voices, wanted)
         .ok_or_else(|| anyhow!("No English system voice is installed (System Settings › Accessibility › Spoken Content)"))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pick_system_voice(voices: &[(String, String)], wanted: Option<&str>) -> Option<String> {
     let w = wanted.map(|w| w.trim().to_lowercase()).unwrap_or_default();
     // A voice asked for by name, in any language.
@@ -581,6 +604,7 @@ fn pick_system_voice(voices: &[(String, String)], wanted: Option<&str>) -> Optio
     best.map(|(_, _, _, n)| n.clone())
 }
 
+#[cfg(target_os = "macos")]
 fn system_speech(text: &str, voice: &str, path: &Path) -> Result<()> {
     let tmp = path.with_extension("part.aiff");
     let status = Command::new("say")
