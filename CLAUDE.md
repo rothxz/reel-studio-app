@@ -69,6 +69,10 @@ src/editor.rs      Editor state: document, edits (+ magnet), undo, playback,
 src/shortcuts.rs   the shortcut table → key bindings, menu, tooltips, dialog
 src/pinch.rs       trackpad pinch → timeline zoom (AppKit magnify
                    monitor; gpui drops the event)
+src/analytics.rs   anonymous usage events → PostHog (the phone app's
+                   project and event names): batching thread, privacy
+                   filter, events derived from each edit; release
+                   builds only, Settings switch
 src/history.rs     undo / redo (document snapshots, coalesced per gesture)
 src/model.rs       Project document (serde): same JSON as the app; unknown fields
                    kept in `extra`; clip edits + `with_magnet`

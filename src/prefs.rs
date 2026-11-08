@@ -22,6 +22,8 @@ pub struct Prefs {
     pub export_resolution: usize,
     /// The folder the last export went to.
     pub export_dir: Option<String>,
+    /// Settings → "Share anonymous usage data" (src/analytics.rs).
+    pub share_usage_data: bool,
 }
 
 impl Default for Prefs {
@@ -36,6 +38,7 @@ impl Default for Prefs {
             snapping: true,
             export_resolution: 1,
             export_dir: None,
+            share_usage_data: true,
         }
     }
 }

@@ -12,7 +12,9 @@ use gpui::{
     AnyElement, Bounds, Context, FontWeight, MouseButton, ObjectFit, Pixels, Point, RenderImage,
     SharedString, Window, canvas, div, img, point, prelude::*, px,
 };
+use serde_json::json;
 
+use crate::analytics;
 use crate::catalog::EFFECT_PREFIX;
 use crate::editor::{Confirm, Editor, HEADER_HEIGHT, Screen};
 use crate::export::{Inputs, Job, Settings, Update};
@@ -47,6 +49,8 @@ pub struct ExportView {
     pub settings: Settings,
     /// The header's resolution label it was started at.
     pub resolution: &'static str,
+    /// The `export_*` analytics properties, fixed at the start.
+    metadata: serde_json::Value,
     pub state: ExportState,
     /// 0–1.
     pub progress: f32,
@@ -56,6 +60,10 @@ pub struct ExportView {
 }
 
 impl ExportView {
+    fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
     pub fn running(&self) -> bool {
         self.state == ExportState::Running
     }
@@ -173,6 +181,9 @@ impl Editor {
             packages: self.packages.clone(),
             stickers,
         };
+        let resolution = RESOLUTIONS[self.prefs.export_resolution.min(RESOLUTIONS.len() - 1)].0;
+        let metadata = analytics::export_props(&self.project, resolution, settings.fps);
+        analytics::track("export_started", metadata.clone());
         let (tx, rx) = async_channel::unbounded();
         let job = Job::start(inputs, settings.clone(), tx);
         self.export_seq += 1;
@@ -184,7 +195,8 @@ impl Editor {
             id,
             job,
             settings,
-            resolution: RESOLUTIONS[self.prefs.export_resolution.min(RESOLUTIONS.len() - 1)].0,
+            resolution,
+            metadata,
             state: ExportState::Running,
             progress: 0.,
             preview: None,
@@ -227,8 +239,28 @@ impl Editor {
             Update::Finished => {
                 view.progress = 1.;
                 view.state = ExportState::Done(view.started.elapsed());
+                let size_mb = std::fs::metadata(&view.settings.path)
+                    .map(|m| (m.len() as f64 / 1_048_576. * 10.).round() / 10.)
+                    .ok();
+                analytics::track(
+                    "export_completed",
+                    analytics::with(
+                        view.metadata.clone(),
+                        json!({ "exportTimeMs": view.elapsed_ms(), "fileSizeMB": size_mb }),
+                    ),
+                );
             }
-            Update::Failed(e) => view.state = ExportState::Failed(e.into()),
+            Update::Failed(e) => {
+                view.state = ExportState::Failed(e.into());
+                // The message can hold a path: only that it failed.
+                analytics::track(
+                    "export_failed",
+                    analytics::with(
+                        view.metadata.clone(),
+                        json!({ "exportTimeMs": view.elapsed_ms(), "errorCategory": "export" }),
+                    ),
+                );
+            }
             Update::Cancelled => view.state = ExportState::Cancelled,
         }
         cx.notify();
@@ -260,6 +292,13 @@ impl Editor {
             && running
         {
             view.job.cancel();
+            analytics::track(
+                "export_cancelled",
+                analytics::with(
+                    view.metadata.clone(),
+                    json!({ "exportTimeMs": view.elapsed_ms() }),
+                ),
+            );
         }
         self.dismiss_export(cx);
         if running {

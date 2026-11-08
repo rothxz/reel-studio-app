@@ -71,6 +71,9 @@ fn app_inputs() {
         ("REEL_ASSETS_URL", "EXPO_PUBLIC_ASSETS_URL"),
         ("REEL_CATALOG_URL", "EXPO_PUBLIC_SUPABASE_URL"),
         ("REEL_CATALOG_KEY", "EXPO_PUBLIC_SUPABASE_KEY"),
+        // The phone app's PostHog project (src/analytics.rs); none = off.
+        ("REEL_POSTHOG_KEY", "EXPO_PUBLIC_POSTHOG_API_KEY"),
+        ("REEL_POSTHOG_HOST", "EXPO_PUBLIC_POSTHOG_HOST"),
     ] {
         println!("cargo:rerun-if-env-changed={ours}");
         let value = std::env::var(ours)
@@ -129,6 +132,13 @@ fn release_inputs() {
             .unwrap_or(default);
         println!("cargo:rustc-env={key}={value}");
     }
+    // A release build (the workflow stamps REEL_VERSION): analytics sends
+    // only from these, local builds just log (src/analytics.rs).
+    let release = std::env::var("REEL_VERSION").is_ok_and(|v| !v.is_empty());
+    println!(
+        "cargo:rustc-env=REEL_RELEASE_BUILD={}",
+        if release { "1" } else { "" }
+    );
 }
 
 /// A static FFmpeg (FFMPEG_DIR from packaging/<os>/build-ffmpeg.sh, the

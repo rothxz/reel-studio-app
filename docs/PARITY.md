@@ -34,7 +34,8 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [~] Settings dialog: Updates and About (version). *No language,
+- [~] Settings dialog: Updates, Privacy (share anonymous usage data) and
+  About (version). *No language,
   appearance or storage yet.*
 - [~] Toasts (single slot, 1.6 s, as the old app), confirm dialog, popup
   menus. *No blocking progress dialog yet.*
@@ -618,3 +619,8 @@ items, tooltips and the dialog.
 - [x] Bundled FFmpeg (LGPL, static, decode only) instead of Homebrew dylibs
   in released apps (`packaging/macos/build-ffmpeg.sh`)
 - [x] CI: fmt, clippy, tests on every pull request (`ci.yml`)
+- [x] Product analytics into the phone app's PostHog project, same event
+  names (`src/analytics.rs`): app / project / import / edit-derived /
+  undo / export events, session summary; release builds only, Settings
+  switch to opt out. *Not yet: AI agent turns, library / browser picks,
+  preview performance.*
