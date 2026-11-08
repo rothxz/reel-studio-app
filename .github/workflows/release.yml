@@ -373,6 +373,9 @@ jobs:
           exit 1
 
       - name: AppImage, tar.gz
+        env:
+          # The API fallback for the pinned AppImage tools (rate limit).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           packaging/linux/bundle.sh target/release/reel-studio-gpui \
             "$VERSION" "${{ matrix.arch }}" dist
@@ -534,11 +537,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history and tags: the notes list the commits since
+          # the last native release.
+          fetch-depth: 0
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: out
           merge-multiple: true
+
+      # What's new: the release body, which the app's update dialog shows.
+      - name: Release notes
+        run: |
+          prev=$(git tag -l 'native-v*' --merged "$GITHUB_SHA" --sort=-v:refname \
+            | grep -vx "$TAG" | head -n1)
+          # One line per commit, its "feat(scope):" prefix dropped and the
+          # first letter capitalised.
+          tidy() { sed -E 's/^- [a-z]+(\([^)]*\))?!?: /- /; s/^- (.)/- \U\1/'; }
+          {
+            echo "## What's new"
+            echo
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "$prev..$GITHUB_SHA" | tidy
+            else
+              git log --no-merges --pretty='- %s' -n 30 "$GITHUB_SHA" | tidy
+            fi
+            echo
+            echo "Built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
+          } > out/notes.md
+          cat out/notes.md
 
       # What each platform's updater installs: the zips (macOS, Windows)
       # and the AppImages.
@@ -559,13 +586,14 @@ jobs:
             # A re-run keeps its run number, so the release already exists.
             gh release upload "$TAG" "${files[@]}" --clobber
             gh release upload "$TAG" out/update.json --clobber
+            gh release edit "$TAG" --notes-file out/notes.md
           else
             flags=(--latest=false)
             [ "$PRERELEASE" = true ] && flags+=(--prerelease)
             gh release create "$TAG" "${files[@]}" --draft "${flags[@]}" \
               --target "$GITHUB_SHA" \
               --title "Reel Studio $VERSION (native)" \
-              --notes "Native app for macOS, Linux and Windows, built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
+              --notes-file out/notes.md
             gh release upload "$TAG" out/update.json
             gh release edit "$TAG" --draft=false "${flags[@]}"
           fi

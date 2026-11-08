@@ -109,7 +109,14 @@ fetch() {
   if ! curl -fsSL --retry 3 --retry-all-errors -o "$dest" \
     "https://github.com/$repo/releases/download/$tag/$file"; then
     echo "release download of $file failed; fetching the same asset through the API" >&2
-    curl -fsSL --retry 5 --retry-all-errors -H 'Accept: application/octet-stream' -o "$dest" \
+    # Without a token the API allows 60 requests an hour per IP, which CI
+    # runners share (403 once spent): send GITHUB_TOKEN when it is set.
+    local auth=()
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+      auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    fi
+    curl -fsSL --retry 5 --retry-all-errors -H 'Accept: application/octet-stream' \
+      ${auth[@]+"${auth[@]}"} -o "$dest" \
       "https://api.github.com/repos/$repo/releases/assets/$asset"
   fi
   echo "$sha  $dest" | sha256sum -c -

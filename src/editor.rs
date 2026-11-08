@@ -302,8 +302,12 @@ pub struct Editor {
     /// Settings, and the app updater it shows.
     pub(crate) settings_open: bool,
     pub(crate) updater: gpui::Entity<crate::updater::Updater>,
-    /// The downloaded version whose restart prompt got "Later".
-    pub(crate) update_later_for: Option<SharedString>,
+    /// The update dialog, opened from the menu's Check for Updates… (it
+    /// also opens by itself when a check finds a new version).
+    pub(crate) update_dialog_open: bool,
+    /// The version (and whether it was downloaded) whose dialog got
+    /// "Later": it stays closed until that changes.
+    pub(crate) update_hidden: Option<(SharedString, bool)>,
     pub(crate) popup: Option<Popup>,
     pub(crate) drag: Option<Drag>,
     /// A slider's value while it is dragged (committed on release).
@@ -330,6 +334,9 @@ pub struct Editor {
     pub(crate) browser_views: [usize; 8],
     /// Media tile pictures, by file path.
     pub(crate) thumbs: HashMap<String, Arc<RenderImage>>,
+    /// The home rows' copies of `thumbs`, cropped to the row's tile so its
+    /// rounded corners show (made on first draw).
+    pub(crate) home_thumbs: RefCell<HashMap<String, Arc<RenderImage>>>,
     /// The category shown in each browser tab with categories (Effects,
     /// Filter).
     pub(crate) browser_categories: [usize; 8],
@@ -522,7 +529,8 @@ impl Editor {
             shortcuts_open: false,
             settings_open: false,
             updater,
-            update_later_for: None,
+            update_dialog_open: false,
+            update_hidden: None,
             popup: None,
             drag: None,
             live_value: None,
@@ -538,6 +546,7 @@ impl Editor {
             browser_tab: 0,
             browser_views: [0; 8],
             thumbs: HashMap::new(),
+            home_thumbs: RefCell::default(),
             browser_categories: [0; 8],
             fx_adjust_open: false,
             effects: EffectCatalog::load(),
@@ -1245,7 +1254,7 @@ impl Editor {
             }
             return;
         }
-        if self.restart_prompt_open(cx) {
+        if self.update_dialog_shown(cx) {
             if id == Shortcut::Deselect {
                 self.update_later(cx);
             }
@@ -2606,7 +2615,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::save_project))
             .on_action(cx.listener(Self::save_project_as))
             .on_action(cx.listener(|ed, _: &OpenSettings, _, cx| ed.open_settings(false, cx)))
-            .on_action(cx.listener(|ed, _: &CheckForUpdates, _, cx| ed.open_settings(true, cx)))
+            .on_action(cx.listener(|ed, _: &CheckForUpdates, _, cx| ed.check_for_updates(cx)))
             .on_drop(cx.listener(|ed, paths: &ExternalPaths, _, cx| {
                 let paths = paths
                     .paths()
@@ -2767,8 +2776,8 @@ impl Editor {
         if let Some(confirm) = &self.confirm {
             out.push(crate::ui::dialogs::confirm_dialog(confirm, cx).into_any_element());
         }
-        if self.restart_prompt_open(cx) {
-            out.push(self.render_restart_prompt(cx));
+        if self.update_dialog_shown(cx) {
+            out.push(self.render_update_dialog(viewport, cx));
         }
         if let Some(msg) = &self.toast {
             out.push(

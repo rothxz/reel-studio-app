@@ -26,6 +26,7 @@ pub mod text_panel;
 pub mod timeline;
 pub mod timeline_edit;
 pub mod toolbar;
+pub mod update_dialog;
 pub mod visual;
 pub mod widgets;
 pub mod window_chrome;

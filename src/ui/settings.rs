@@ -1,8 +1,8 @@
 //! Settings (app menu → Settings…, ⌘, or the home screen's gear): the old
 //! desktop Settings dialog. So far its Updates group (check, download,
 //! restart) and the version; language, appearance and the editing
-//! defaults are still to come (docs/PARITY.md). A finished download asks
-//! to restart even with the dialog closed; "Later" installs on quit.
+//! defaults are still to come (docs/PARITY.md). Found and downloaded
+//! versions also show in the update dialog (ui/update_dialog.rs).
 
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, Pixels, SharedString, Size, div, prelude::*, px,
@@ -18,32 +18,13 @@ const MAX_WIDTH: f32 = 600.;
 const MAX_HEIGHT: f32 = 720.;
 
 impl Editor {
-    /// Opens Settings and, from the menu's Check for Updates…, checks.
+    /// Opens Settings (and, when asked, checks for updates).
     pub fn open_settings(&mut self, check: bool, cx: &mut Context<Self>) {
         self.settings_open = true;
         self.popup = None;
         if check {
             self.updater.update(cx, |u, cx| u.check(cx));
         }
-        cx.notify();
-    }
-
-    /// Saves the open project, then installs the download and relaunches.
-    fn restart_to_update(&mut self, cx: &mut Context<Self>) {
-        self.save_now(cx);
-        self.updater.update(cx, |u, cx| u.restart(cx));
-    }
-
-    /// The restart prompt is up: a version is downloaded and the user
-    /// hasn't put it off.
-    pub(crate) fn restart_prompt_open(&self, cx: &gpui::App) -> bool {
-        let u = self.updater.read(cx);
-        u.status == Status::Downloaded && self.update_later_for != u.version
-    }
-
-    /// Esc on the restart prompt: Later.
-    pub(crate) fn update_later(&mut self, cx: &mut Context<Self>) {
-        self.update_later_for = self.updater.read(cx).version.clone();
         cx.notify();
     }
 
@@ -199,80 +180,6 @@ impl Editor {
                         })),
                 )
             })
-            .into_any_element()
-    }
-
-    /// "Version X is ready", Later · Restart now (over everything).
-    pub(crate) fn render_restart_prompt(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let version = self.updater.read(cx).version.clone().unwrap_or_default();
-        div()
-            .id("restart-backdrop")
-            .absolute()
-            .inset_0()
-            .occlude()
-            .bg(theme::backdrop())
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .id("restart-prompt")
-                    .w(px(360.))
-                    .p(px(24.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(16.))
-                    .rounded(px(12.))
-                    .bg(theme::app_bg())
-                    .border_1()
-                    .border_color(theme::card_border())
-                    .shadow_lg()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(Icon::RefreshCircle.el(40., theme::text()))
-                            .child(
-                                div()
-                                    .text_size(px(theme::LG))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_center()
-                                    .child(format!("Version {version} is ready")),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(theme::SM))
-                                    .text_color(theme::text_secondary())
-                                    .text_center()
-                                    .child(
-                                        "Restart Reel Studio to finish updating. Save anything \
-                                         you're working on first.",
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .child(
-                                pill_button("restart-later", "Later", false)
-                                    .flex_1()
-                                    .rounded_full()
-                                    .on_click(cx.listener(|ed, _, _, cx| ed.update_later(cx))),
-                            )
-                            .child(
-                                pill_button("restart-now", "Restart now", true)
-                                    .flex_1()
-                                    .rounded_full()
-                                    .on_click(cx.listener(|ed, _, _, cx| {
-                                        ed.restart_to_update(cx);
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
-            )
             .into_any_element()
     }
 }

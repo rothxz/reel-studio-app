@@ -40,17 +40,33 @@ pub struct AgentUi {
     pub address: gpui::Entity<TextInput>,
     pub key: gpui::Entity<TextInput>,
     pub scroll: ScrollHandle,
+    /// The request box's own scroll, once it's taller than its most lines.
+    pub input_scroll: ScrollHandle,
 }
 
 impl AgentUi {
     pub fn new(cx: &mut Context<Editor>) -> Self {
-        let input = cx.new(|cx| TextInput::new("Ask for an edit…", false, cx).max_len(2000));
-        cx.subscribe(&input, |ed: &mut Editor, _, ev: &InputEvent, cx| match ev {
-            InputEvent::Submit(text) => ed.agent_send(text.clone(), cx),
-            // The model loads while the request is typed.
-            InputEvent::Changed(_) => ed.agent_warm_up(cx),
-            InputEvent::Blur => {}
-        })
+        // Several lines: Enter sends, Shift+Enter breaks the line.
+        let input = cx.new(|cx| {
+            TextInput::new("Ask for an edit…", true, cx)
+                .submit_on_enter()
+                .max_len(2000)
+        });
+        cx.subscribe(
+            &input,
+            |ed: &mut Editor, input, ev: &InputEvent, cx| match ev {
+                InputEvent::Submit(text) => ed.agent_send(text.clone(), cx),
+                InputEvent::Changed(_) => {
+                    // Typing at the end keeps the last line in view.
+                    if input.read(cx).caret_at_end() {
+                        ed.agent_ui.input_scroll.scroll_to_bottom();
+                    }
+                    // The model loads while the request is typed.
+                    ed.agent_warm_up(cx)
+                }
+                InputEvent::Blur => {}
+            },
+        )
         .detach();
         let address = cx.new(|cx| TextInput::new("http://localhost:11434", false, cx).max_len(300));
         cx.subscribe(&address, |ed: &mut Editor, _, ev: &InputEvent, cx| {
@@ -71,9 +87,14 @@ impl AgentUi {
             address,
             key,
             scroll: ScrollHandle::new(),
+            input_scroll: ScrollHandle::new(),
         }
     }
 }
+
+/// The request box's line height and how many lines it grows to.
+const REQUEST_LINE: f32 = 16.;
+const REQUEST_MAX_LINES: f32 = 6.;
 
 const SUGGESTIONS: [&str; 4] = [
     "Make a 60-second explainer about saving money, with voiceover and captions",
@@ -692,6 +713,30 @@ impl Editor {
             .child(field.clone())
     }
 
+    /// The request: one line tall when empty, growing to
+    /// `REQUEST_MAX_LINES` with what's typed, then scrolling.
+    fn request_box(&self) -> impl IntoElement {
+        div()
+            .flex_1()
+            .min_w_0()
+            .rounded(px(6.))
+            .bg(theme::lane_bg())
+            .border_1()
+            .border_color(theme::chip_border())
+            .text_size(px(theme::SM))
+            .line_height(px(REQUEST_LINE))
+            .child(
+                div()
+                    .id("agent-request")
+                    .max_h(px(REQUEST_LINE * REQUEST_MAX_LINES + 12.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.agent_ui.input_scroll)
+                    .px(px(8.))
+                    .py(px(6.))
+                    .child(self.agent_ui.input.clone()),
+            )
+    }
+
     fn label(text: &'static str) -> gpui::Div {
         div()
             .mt(px(12.))
@@ -965,9 +1010,9 @@ impl Editor {
         footer = footer.child(
             div()
                 .flex()
-                .items_center()
+                .items_end()
                 .gap_2()
-                .child(self.field_box(&self.agent_ui.input))
+                .child(self.request_box())
                 .child(if busy {
                     pill_button("agent-stop", "Stop", false)
                         .on_click(cx.listener(|ed, _, _, cx| ed.agent_stop(cx)))
