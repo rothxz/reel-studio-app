@@ -469,19 +469,116 @@ fn audible(project: &Project) -> Vec<&Clip> {
         .collect()
 }
 
-struct Timeline {
+/// The timeline's sound from a time on, mixed block by block at a rate:
+/// each audible clip decoded from its source time, resampled, times its
+/// gain, summed. The playback mixer feeds the speaker from it; export
+/// feeds the encoder.
+pub struct TimelineMix {
     project: Arc<Project>,
-    /// Timeline time of the next block.
-    clock: Micros,
+    /// Where it started (timeline time) and the frames mixed since: the
+    /// clock, counted in samples so it doesn't drift.
+    start: Micros,
+    mixed: u64,
+    rate: u32,
     /// Open decoders by clip (None: the file has no sound).
     streams: HashMap<String, Option<Stream>>,
+}
+
+impl TimelineMix {
+    pub fn new(project: Arc<Project>, at: Micros, rate: u32) -> Self {
+        TimelineMix {
+            project,
+            start: at,
+            mixed: 0,
+            rate: rate.max(1),
+            streams: HashMap::new(),
+        }
+    }
+
+    /// Timeline time of the next frame mixed.
+    fn clock(&self) -> Micros {
+        self.start + (self.mixed as u128 * SECOND as u128 / self.rate as u128) as Micros
+    }
+
+    /// Adds the next `mix.len()` frames of the timeline into `mix`
+    /// (unclamped).
+    pub fn mix(&mut self, mix: &mut [[f32; 2]]) {
+        let n = mix.len();
+        let mut scratch = vec![[0f32; 2]; n];
+        let rate = self.rate as f64;
+        let t0 = self.clock();
+        self.mixed += n as u64;
+        let t1 = self.clock();
+        let project = self.project.clone();
+        if t0 >= project.duration {
+            return; // past the end: quiet
+        }
+        let clips = audible(&project);
+        for clip in &clips {
+            let (start, end) = (clip.timeline_start, clip.end());
+            // Opened (and placed) a little before it starts.
+            if start >= t1 && start < t1 + PREPARE {
+                if let Some(s) = self
+                    .streams
+                    .entry(clip.id.clone())
+                    .or_insert_with(|| clip.source.as_deref().and_then(|p| Stream::open(p).ok()))
+                    .as_mut()
+                {
+                    let want = clip.source_start.unwrap_or(0);
+                    if (s.position() - want).abs() > SEEK_SLACK {
+                        s.seek(want);
+                    }
+                }
+                continue;
+            }
+            if end <= t0 || start >= t1 {
+                continue;
+            }
+            let Some(stream) = self
+                .streams
+                .entry(clip.id.clone())
+                .or_insert_with(|| clip.source.as_deref().and_then(|p| Stream::open(p).ok()))
+                .as_mut()
+            else {
+                continue;
+            };
+            // The part of the block inside the clip.
+            let from = ((start - t0).max(0) as f64 * rate / SECOND as f64).round() as usize;
+            let to = (((end - t0) as f64 * rate / SECOND as f64).round() as usize).min(n);
+            if from >= to {
+                continue;
+            }
+            let speed = if clip.speed > 0. { clip.speed } else { 1. };
+            let at = t0 + (from as f64 * SECOND as f64 / rate) as Micros;
+            let local = at - start;
+            let src = clip.source_start.unwrap_or(0) + (local as f64 * speed) as Micros;
+            if (stream.position() - src).abs() > SEEK_SLACK {
+                stream.seek(src);
+            }
+            let step = stream.rate as f64 * speed / rate;
+            let part = &mut scratch[from..to];
+            stream.read(part, step);
+            for (i, s) in part.iter().enumerate() {
+                let t_local = local + ((i as f64) * SECOND as f64 / rate) as Micros;
+                let g = clip_gain(clip, t_local);
+                mix[from + i][0] += s[0] * g;
+                mix[from + i][1] += s[1] * g;
+            }
+        }
+        // Decoders of clips well behind or ahead are closed.
+        self.streams.retain(|id, _| {
+            clips.iter().any(|c| {
+                c.id == *id && c.end() > t0 - SECOND && c.timeline_start < t1 + 2 * PREPARE
+            })
+        });
+    }
 }
 
 struct Mixer {
     shared: Arc<Shared>,
     rate: u32,
     back: Sender<Cmd>,
-    timeline: Option<Timeline>,
+    timeline: Option<TimelineMix>,
     preview: Option<(String, Stream)>,
     /// The preview asked for last (an older one opening is dropped).
     preview_wanted: Option<String>,
@@ -532,11 +629,9 @@ impl Mixer {
                 // Keep the open decoders of clips still in the document.
                 let mut streams = self.timeline.take().map(|t| t.streams).unwrap_or_default();
                 streams.retain(|id, _| project.find_clip(id).is_some());
-                self.timeline = Some(Timeline {
-                    project,
-                    clock: at,
-                    streams,
-                });
+                let mut timeline = TimelineMix::new(project, at, self.rate);
+                timeline.streams = streams;
+                self.timeline = Some(timeline);
                 self.shared.timeline.store(true, Ordering::Relaxed);
                 self.restart_output();
             }
@@ -606,74 +701,7 @@ impl Mixer {
         let mut scratch = vec![[0f32; 2]; BLOCK];
         let rate = self.rate as f64;
         if let Some(tl) = &mut self.timeline {
-            let t0 = tl.clock;
-            let t1 = t0 + (BLOCK as f64 * SECOND as f64 / rate) as Micros;
-            let project = tl.project.clone();
-            let clips = audible(&project);
-            for clip in &clips {
-                let (start, end) = (clip.timeline_start, clip.end());
-                // Opened (and placed) a little before it starts.
-                if start >= t1 && start < t1 + PREPARE {
-                    if let Some(s) = tl
-                        .streams
-                        .entry(clip.id.clone())
-                        .or_insert_with(|| {
-                            clip.source.as_deref().and_then(|p| Stream::open(p).ok())
-                        })
-                        .as_mut()
-                    {
-                        let want = clip.source_start.unwrap_or(0);
-                        if (s.position() - want).abs() > SEEK_SLACK {
-                            s.seek(want);
-                        }
-                    }
-                    continue;
-                }
-                if end <= t0 || start >= t1 {
-                    continue;
-                }
-                let Some(stream) = tl
-                    .streams
-                    .entry(clip.id.clone())
-                    .or_insert_with(|| clip.source.as_deref().and_then(|p| Stream::open(p).ok()))
-                    .as_mut()
-                else {
-                    continue;
-                };
-                // The part of the block inside the clip.
-                let from = ((start - t0).max(0) as f64 * rate / SECOND as f64).round() as usize;
-                let to = (((end - t0) as f64 * rate / SECOND as f64).round() as usize).min(BLOCK);
-                if from >= to {
-                    continue;
-                }
-                let speed = if clip.speed > 0. { clip.speed } else { 1. };
-                let at = t0 + (from as f64 * SECOND as f64 / rate) as Micros;
-                let local = at - start;
-                let src = clip.source_start.unwrap_or(0) + (local as f64 * speed) as Micros;
-                if (stream.position() - src).abs() > SEEK_SLACK {
-                    stream.seek(src);
-                }
-                let step = stream.rate as f64 * speed / rate;
-                let part = &mut scratch[from..to];
-                stream.read(part, step);
-                for (i, s) in part.iter().enumerate() {
-                    let t_local = local + ((i as f64) * SECOND as f64 / rate) as Micros;
-                    let g = clip_gain(clip, t_local);
-                    mix[from + i][0] += s[0] * g;
-                    mix[from + i][1] += s[1] * g;
-                }
-            }
-            // Decoders of clips well behind or ahead are closed.
-            tl.streams.retain(|id, _| {
-                clips.iter().any(|c| {
-                    c.id == *id && c.end() > t0 - SECOND && c.timeline_start < t1 + 2 * PREPARE
-                })
-            });
-            tl.clock = t1;
-            if t0 >= project.duration {
-                // Past the end: quiet.
-                mix.fill([0., 0.]);
-            }
+            tl.mix(&mut mix);
         }
         let mut ended = false;
         if let Some((_, stream)) = &mut self.preview {

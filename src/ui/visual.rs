@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::decoder;
 use crate::editor::{Editor, NudgeFn, SliderFn};
-use crate::effects::stack::{MaskPlan, Placement};
+use crate::effects::stack::{self as fx_stack, Placement};
 use crate::model::{Clip, Micros};
 use crate::theme;
 use crate::ui::color_row::{BACKGROUND_COLORS, SWATCH_COLORS};
@@ -140,12 +140,7 @@ impl Editor {
     /// A property at clip-local `local`: keyframes evaluated by the engine,
     /// else the clip's own value.
     pub(crate) fn property_at(&self, clip: &Clip, id: &str, local: Micros) -> Option<f64> {
-        let own = clip.static_property(id);
-        if clip.is_animated() {
-            self.engine.clip_property(&clip.id, id, local).or(own)
-        } else {
-            own
-        }
+        crate::engine::clip_property_at(&self.engine, clip, id, local)
     }
 
     /// A held Visual control (slider dragged, number field scrubbed) as the
@@ -202,53 +197,7 @@ impl Editor {
                 _ => self.property_at(clip, id, local).unwrap_or(def) as f32,
             }
         };
-        let crop = clip.extra.get("crop").map_or([0., 0., 1., 1.], |c| {
-            let f = |k: &str, d: f64| c.get(k).and_then(|v| v.as_f64()).unwrap_or(d) as f32;
-            let (w, h) = (f("width", 1.), f("height", 1.));
-            if w > 0. && h > 0. {
-                [f("x", 0.), f("y", 0.), w, h]
-            } else {
-                [0., 0., 1., 1.]
-            }
-        });
-        let crop_turn = clip
-            .extra
-            .get("crop")
-            .and_then(|c| c.get("rotation"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.) as f32;
-        let mask = clip.mask().map(|m| MaskPlan {
-            shape: MaskShape::ALL
-                .iter()
-                .position(|s| *s == m.shape)
-                .unwrap_or(2) as u32,
-            center: [
-                get("mask.centerX", m.center_x),
-                get("mask.centerY", m.center_y),
-            ],
-            size: [get("mask.width", m.width), get("mask.height", m.height)],
-            rotation: get("mask.rotation", m.rotation),
-            feather: get("mask.feather", m.feather),
-            invert: m.invert,
-        });
-        let blend = BLEND_MODES
-            .iter()
-            .position(|(id, _)| *id == clip.blend_mode())
-            .unwrap_or(0) as u32;
-        Placement {
-            x: get("transform.x", 0.),
-            y: get("transform.y", 0.),
-            scale: get("transform.scale", 1.),
-            rotation: get("transform.rotation", 0.),
-            opacity: get("transform.opacity", 1.).clamp(0., 1.),
-            flip_x: clip.flipped(false),
-            flip_y: clip.flipped(true),
-            crop,
-            crop_turn,
-            mask,
-            blend,
-            natural: None,
-        }
+        fx_stack::place(clip, get)
     }
 
     /// The clip's picture size (its crop box of the source), when known.

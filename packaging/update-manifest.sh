@@ -2,16 +2,18 @@
 # Writes a release's update.json (read by src/updater.rs): the version and,
 # per platform, the zip to install with its SHA-256 and size.
 #
-#   packaging/update-manifest.sh <version> <download-base-url> <zip>... > update.json
+#   packaging/update-manifest.sh <version> <download-base-url> <file>... > update.json
 #
-# Zips are named Reel-Studio-<version>-mac-<arm64|x64>.zip (bundle.sh); the
-# keys are the updater's platform_key(): darwin-aarch64 / darwin-x86_64.
+# The files are what each platform's updater installs (packaging/<os>/
+# bundle.*): Reel-Studio-<version>-mac-<arm64|x64>.zip,
+# …-linux-<x64|arm64>.AppImage, …-windows-<x64|arm64>.zip. The keys are the
+# updater's platform_key(): darwin-aarch64, linux-x86_64, windows-x86_64…
 set -euo pipefail
 
-version=${1:?usage: update-manifest.sh <version> <base-url> <zip>...}
+version=${1:?usage: update-manifest.sh <version> <base-url> <file>...}
 base=${2:?base url}
 shift 2
-[ $# -gt 0 ] || { echo "no zips" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "no files" >&2; exit 1; }
 
 entries=()
 for zip in "$@"; do
@@ -19,6 +21,10 @@ for zip in "$@"; do
   case "$name" in
     *-mac-arm64.zip) key=darwin-aarch64 ;;
     *-mac-x64.zip) key=darwin-x86_64 ;;
+    *-linux-x64.AppImage) key=linux-x86_64 ;;
+    *-linux-arm64.AppImage) key=linux-aarch64 ;;
+    *-windows-x64.zip) key=windows-x86_64 ;;
+    *-windows-arm64.zip) key=windows-aarch64 ;;
     *) echo "unknown platform: $name" >&2; exit 1 ;;
   esac
   case "$name" in

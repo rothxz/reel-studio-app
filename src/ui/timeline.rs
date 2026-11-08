@@ -413,6 +413,11 @@ fn cover_source(project: &Project) -> Option<CoverSource> {
         .and_then(|u| u.as_str())
     {
         let path = uri.strip_prefix("file://").unwrap_or(uri);
+        // file:///C:/… on Windows: no slash before the drive.
+        let path = match path.as_bytes() {
+            [b'/', _, b':', ..] if cfg!(windows) => &path[1..],
+            _ => path,
+        };
         if !path.is_empty() {
             return Some(CoverSource::Still(path.to_string()));
         }
@@ -1949,7 +1954,7 @@ mod tests {
             .unwrap(),
         );
         let text = p.tracks.len() - 1;
-        let mut cap = |id: &str, start: i64| {
+        let cap = |id: &str, start: i64| {
             let mut c = clip(id, start, 2);
             c.extra.insert("caption".into(), serde_json::json!({}));
             c

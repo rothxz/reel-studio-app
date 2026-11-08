@@ -85,6 +85,16 @@ pub fn values(mut f: impl FnMut(&str) -> f64) -> [f64; 7] {
     CONTROLS.map(|c| f(c.key))
 }
 
+/// A video / photo's Adjust sliders as a colour matrix, each from
+/// `value` (None when they're all 0, or on other clips).
+pub fn matrix(clip: &Clip, value: impl Fn(&Control) -> f64) -> Option<[f32; 20]> {
+    if clip.kind != "video" && clip.kind != "image" {
+        return None;
+    }
+    let values = values(|key| value(control(key).expect("a control")));
+    crate::engine::adjust_color_matrix(&values)
+}
+
 impl Clip {
     /// The clip's Adjust effect (the first one switched on).
     pub fn adjust_effect(&self) -> Option<EffectInstance> {

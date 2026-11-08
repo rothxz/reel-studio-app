@@ -59,6 +59,21 @@ cargo dev ~/Movies/a.mp4              # run --release --features cpp-engine
 cargo t                               # tests on the C++ engine
 ```
 
+On Windows (Rust MSVC + Visual Studio 2022 Build Tools with the C++
+workload; no admin rights needed), `tools\windows.ps1` sets up the rest
+and wraps cargo:
+
+```powershell
+tools\windows.ps1 setup               # once: MSYS2, libclang, static FFmpeg (~25 min)
+tools\windows.ps1 dev C:\Videos\a.mp4 # build (release) and run
+tools\windows.ps1 test                # cargo test
+tools\windows.ps1 check               # fmt --check + clippy
+tools\windows.ps1 bundle              # zip + installer into dist\
+```
+
+It uses the C++ engine when `REEL_ENGINE_DIR` (or `..\reel-studio`) has
+its sources, the Rust stand-in otherwise. See `docs/PLATFORMS.md`.
+
 Working on it: `/CLAUDE.md` is the context (rules, architecture, where each
 part of the old editor lives), and `docs/PARITY.md` tracks what's done.
 

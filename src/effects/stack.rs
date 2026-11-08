@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use crate::catalog::{self, EFFECT_PREFIX, FILTER_PREFIX};
 use crate::model::{Clip, EffectInstance, Micros, Project, SECOND, TrackType};
-use crate::visual::Background;
+use crate::visual::{BLEND_MODES, Background, MaskShape};
 
 use super::package::{EffectKind, EffectPackage, Lookup, Packages};
 
@@ -112,6 +112,95 @@ impl Placement {
     /// Contain-fit as it is: nothing to compose.
     pub fn is_plain(&self) -> bool {
         *self == Placement::default()
+    }
+}
+
+/// Where `clip`'s picture lands on the canvas: its transform and mask from
+/// `get` (a property id and its default → the value to draw, keyframes
+/// evaluated, a held control applied), with the crop, mirror / flip and
+/// Splice blend from the document. `natural` is left for the caller.
+pub fn place(clip: &Clip, get: impl Fn(&str, f64) -> f32) -> Placement {
+    let crop = clip.extra.get("crop").map_or([0., 0., 1., 1.], |c| {
+        let f = |k: &str, d: f64| c.get(k).and_then(|v| v.as_f64()).unwrap_or(d) as f32;
+        let (w, h) = (f("width", 1.), f("height", 1.));
+        if w > 0. && h > 0. {
+            [f("x", 0.), f("y", 0.), w, h]
+        } else {
+            [0., 0., 1., 1.]
+        }
+    });
+    let crop_turn = clip
+        .extra
+        .get("crop")
+        .and_then(|c| c.get("rotation"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.) as f32;
+    let mask = clip.mask().map(|m| MaskPlan {
+        shape: MaskShape::ALL
+            .iter()
+            .position(|s| *s == m.shape)
+            .unwrap_or(2) as u32,
+        center: [
+            get("mask.centerX", m.center_x),
+            get("mask.centerY", m.center_y),
+        ],
+        size: [get("mask.width", m.width), get("mask.height", m.height)],
+        rotation: get("mask.rotation", m.rotation),
+        feather: get("mask.feather", m.feather),
+        invert: m.invert,
+    });
+    let blend = BLEND_MODES
+        .iter()
+        .position(|(id, _)| *id == clip.blend_mode())
+        .unwrap_or(0) as u32;
+    Placement {
+        x: get("transform.x", 0.),
+        y: get("transform.y", 0.),
+        scale: get("transform.scale", 1.),
+        rotation: get("transform.rotation", 0.),
+        opacity: get("transform.opacity", 1.).clamp(0., 1.),
+        flip_x: clip.flipped(false),
+        flip_y: clip.flipped(true),
+        crop,
+        crop_turn,
+        mask,
+        blend,
+        natural: None,
+    }
+}
+
+/// A sticker's share of the canvas's short side at zoom 1.
+pub const STICKER_FRACTION: f32 = 0.4;
+
+/// A text / sticker picture's own size at zoom 1 (canvas widths, heights)
+/// on a canvas of `canvas` document px; None for videos and photos, which
+/// are contain-fitted. `width`×`height` is its picture, drawn `raster_px`
+/// pixels per canvas px (text).
+pub fn natural_size(
+    clip: &Clip,
+    (width, height): (u32, u32),
+    raster_px: f32,
+    canvas: (u32, u32),
+) -> Option<[f32; 2]> {
+    let (cw, ch) = (canvas.0.max(1) as f32, canvas.1.max(1) as f32);
+    match clip.kind.as_str() {
+        // Its picture's own size.
+        "text" => Some([
+            width as f32 / raster_px / cw,
+            height as f32 / raster_px / ch,
+        ]),
+        // Fitted in a share of the canvas's short side.
+        "sticker" => {
+            let n = |k: &str| clip.extra.get(k).and_then(|v| v.as_f64());
+            let (sw, sh) = match (n("sourceWidth"), n("sourceHeight")) {
+                (Some(a), Some(b)) if a > 0. && b > 0. => (a as f32, b as f32),
+                _ => (width as f32, height as f32),
+            };
+            let side = cw.min(ch) * STICKER_FRACTION;
+            let fit = (side / sw).min(side / sh);
+            Some([sw * fit / cw, sh * fit / ch])
+        }
+        _ => None,
     }
 }
 

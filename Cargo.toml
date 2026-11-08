@@ -6,10 +6,15 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 async-channel = "2.5.0"
+# The local hour for the home greeting (std has no time zones).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cosmic-text = "0.14"
 cpal = "0.18.2"
 ffmpeg-next = "9"
-gpui = "0.2.2"
+# gpui's defaults minus `windows-manifest`: build.rs embeds our own manifest
+# (a superset of gpui's), and two RT_MANIFEST #1 resources fail the link
+# (CVT1100 duplicate resource).
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"] }
 image = "0.25"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -17,6 +22,10 @@ sha2 = "0.10"
 tiny-skia = "0.11"
 ttf-parser = "0.25"
 ureq = "3"
+# The preview's portable GPU renderer (src/effects/portable.rs): always off
+# macOS, on macOS only with the `wgpu-effects` feature (to test it there).
+wgpu = { version = "25", optional = true, default-features = false, features = ["glsl", "metal"] }
+pollster = { version = "0.4", optional = true }
 
 # The effect / filter passes of the preview (gpui already links both).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -25,9 +34,22 @@ objc = "0.2"
 # The AI agent's API keys, kept in the login keychain.
 security-framework = "3"
 
+# Off macOS the preview draws on wgpu: Vulkan (Linux), DX12 or Vulkan (Windows).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+wgpu = { version = "25", default-features = false, features = ["glsl", "vulkan", "dx12"] }
+pollster = "0.4"
+
 [build-dependencies]
 cc = "1.11.1"
+
+# The Windows resources (manifest, icon, version) of reel-studio.exe.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 [features]
 # Link the shared C++ engine core from the main repo (needs REEL_ENGINE_DIR).
 cpp-engine = []
+# Build the portable (wgpu) preview renderer on macOS too, and run its
+# tests there: `cargo test --features wgpu-effects`. The app still draws
+# with Metal on macOS.
+wgpu-effects = ["dep:wgpu", "dep:pollster"]

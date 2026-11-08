@@ -1,16 +1,19 @@
 //! The title bar: ✕ and save state on the left, the project name (with a
 //! Beta badge) in the middle, Shortcuts · export resolution · Export on the
 //! right. It is the window's title bar too: padded clear of the traffic
-//! lights, and its empty parts move the window.
+//! lights (macOS), with the app menu and the window's buttons elsewhere
+//! (`window_chrome`), and its empty parts move the window.
 
 use gpui::{Context, FontWeight, MouseButton, Window, div, prelude::*, px};
 
 use crate::editor::{Editor, HEADER_HEIGHT, PopupItem};
+use crate::export;
 use crate::prefs::RESOLUTIONS;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
 use crate::ui::icons::Icon;
 use crate::ui::widgets::{chip, icon_button, label_text, tooltip};
+use crate::ui::window_chrome::{self, drag_area};
 
 /// Room for the macOS traffic lights (placed at 12, 12).
 const TRAFFIC_LIGHTS: f32 = 70.;
@@ -20,6 +23,7 @@ impl Editor {
         let dirty = self.dirty;
         let resolution = RESOLUTIONS[self.prefs.export_resolution.min(RESOLUTIONS.len() - 1)].0;
         let full_screen = window.is_fullscreen();
+        let controls = window_chrome::draws_controls(window);
 
         div()
             .id("header")
@@ -32,21 +36,19 @@ impl Editor {
             } else {
                 8.
             }))
-            .pr_2()
+            .pr(px(if controls { 0. } else { 8. }))
             .border_b_1()
             .border_color(theme::card_border())
-            // Double-click on the bar zooms the window, like a title bar.
-            .on_click(|e, window, _| {
-                if e.click_count() == 2 {
-                    window.titlebar_double_click();
-                }
-            })
             .child(
                 div()
                     .flex_1()
+                    .h_full()
                     .flex()
                     .items_center()
                     .gap_2()
+                    .when(window_chrome::draws_menu(), |d| {
+                        d.child(self.render_menu_button(cx))
+                    })
                     .child(
                         icon_button("close-project", Icon::Close, "Back to projects")
                             .size(17.)
@@ -71,7 +73,8 @@ impl Editor {
                                 },
                                 theme::text_tertiary(),
                             )),
-                    ),
+                    )
+                    .child(drag_area("header-drag-left")),
             )
             .child(
                 div()
@@ -122,10 +125,11 @@ impl Editor {
             .child(
                 div()
                     .flex_1()
+                    .h_full()
                     .flex()
                     .items_center()
-                    .justify_end()
                     .gap_2()
+                    .child(drag_area("header-drag-right"))
                     .child(
                         chip("ai-agent")
                             .when(self.agent.settings.open, |d| {
@@ -163,7 +167,7 @@ impl Editor {
                         chip("resolution")
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(|ed, e: &gpui::ClickEvent, _, cx| {
-                                let items = RESOLUTIONS
+                                let mut items: Vec<PopupItem> = RESOLUTIONS
                                     .iter()
                                     .enumerate()
                                     .map(|(i, (label, _))| {
@@ -175,6 +179,22 @@ impl Editor {
                                         .checked(ed.prefs.export_resolution == i)
                                     })
                                     .collect();
+                                // The frame rate: the project's own (snapped)
+                                // until one is picked.
+                                let fps = ed
+                                    .export_fps
+                                    .unwrap_or_else(|| export::snap_fps(ed.project.canvas.fps));
+                                items.push(PopupItem::separator());
+                                items.extend(export::FRAME_RATES.iter().map(|&rate| {
+                                    PopupItem::new(
+                                        format!("{rate} fps"),
+                                        move |ed: &mut Editor, _, cx| {
+                                            ed.export_fps = Some(rate);
+                                            cx.notify();
+                                        },
+                                    )
+                                    .checked(fps == rate)
+                                }));
                                 ed.open_popup(e.position(), items, cx);
                             }))
                             .child(
@@ -212,5 +232,9 @@ impl Editor {
                             ),
                     ),
             )
+            .when(controls, |d| {
+                d.child(div().w(px(8.)))
+                    .child(self.render_window_controls(window, cx))
+            })
     }
 }

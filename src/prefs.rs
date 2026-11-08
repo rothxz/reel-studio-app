@@ -20,6 +20,8 @@ pub struct Prefs {
     pub snapping: bool,
     /// Export resolution: index into `RESOLUTIONS`.
     pub export_resolution: usize,
+    /// The folder the last export went to.
+    pub export_dir: Option<String>,
 }
 
 impl Default for Prefs {
@@ -33,6 +35,7 @@ impl Default for Prefs {
             preview_axis: true,
             snapping: true,
             export_resolution: 1,
+            export_dir: None,
         }
     }
 }
@@ -40,11 +43,17 @@ impl Default for Prefs {
 /// Export resolutions offered in the header (label, short side scale).
 pub const RESOLUTIONS: [(&str, f32); 3] = [("720p", 720. / 1080.), ("1080p", 1.), ("4K", 2.)];
 
+/// The user's home folder (`USERPROFILE` on Windows, which has no HOME).
+pub fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 /// The app's data folder (created on first use).
 pub fn data_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
+    let home = home_dir();
     let dir = if cfg!(target_os = "macos") {
         home.join("Library/Application Support/Reel Studio")
     } else if cfg!(target_os = "windows") {
