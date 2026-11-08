@@ -194,6 +194,25 @@ Electron build. Without them the app is ad-hoc signed: it runs and
 updates, but Gatekeeper asks on first open, and macOS forgets folder
 permissions after every update (each ad-hoc build is a new identity).
 
+**Analytics** (`src/analytics.rs`): anonymous usage events to the phone
+app's PostHog project, with its event names, so desktop shows up on the
+same funnel and dashboards (`platform` = `macos` / `windows` / `linux`).
+`REEL_POSTHOG_KEY` / `REEL_POSTHOG_HOST` come from the app checkout's
+`.env` (`EXPO_PUBLIC_POSTHOG_*`) or the optional `release` secrets of the
+same names; without a key nothing is sent. Only release builds send
+(`REEL_ANALYTICS_IN_DEV=1` to test from a local build, `REEL_ANALYTICS=0`
+to switch it off); local builds print `[analytics] event {props}` to
+stderr (`REEL_ANALYTICS_LOG=0` silences it). Settings → Privacy → "Share
+anonymous usage data" (on by default) stops it at once. Events carry a
+random install id (`<data>/analytics-id`), app version, OS and CPU, and
+counts or catalog names; paths, URLs, project names and typed text are
+never sent (`sanitize` drops them as a backstop), GeoIP is off and no
+person profile is made. Edit events come from one place: `Editor::edit`
+hands each edit's before / after document to `EditorSession`, which
+derives clip / text / sticker / audio / effect / filter / transition
+events and rate-limits timeline gestures. A background thread batches
+(≤ 50, every 30 s or 20 waiting, 200 kept offline) and flushes on quit.
+
 **Keeping a public repo clean**: no keys, `.env` files, certificates or
 private sources are ever committed (the build reads them from the
 environment and the private checkout). The release workflow hands each

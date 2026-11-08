@@ -32,6 +32,10 @@
 #                       host, catalog database URL + publishable key); the
 #                       same values as the app's EXPO_PUBLIC_ASSETS_URL /
 #                       EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_KEY.
+#   REEL_POSTHOG_KEY, REEL_POSTHOG_HOST
+#                       optional. The phone app's PostHog project (its
+#                       EXPO_PUBLIC_POSTHOG_API_KEY / _HOST): anonymous usage
+#                       events, src/analytics.rs. Unset = no analytics.
 #   MAC_CSC_LINK (base64 .p12, Developer ID Application), MAC_CSC_KEY_PASSWORD
 #                       sign; APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
 #                       APPLE_TEAM_ID notarize. Optional: without them the
@@ -212,6 +216,8 @@ jobs:
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
           REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
+          REEL_POSTHOG_KEY: ${{ secrets.REEL_POSTHOG_KEY }}
+          REEL_POSTHOG_HOST: ${{ secrets.REEL_POSTHOG_HOST }}
         run: |
           log="$RUNNER_TEMP/build.log"
           if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} --target "${{ matrix.target }}" > "$log" 2>&1; then
@@ -357,6 +363,8 @@ jobs:
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
           REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
+          REEL_POSTHOG_KEY: ${{ secrets.REEL_POSTHOG_KEY }}
+          REEL_POSTHOG_HOST: ${{ secrets.REEL_POSTHOG_HOST }}
         run: |
           log="$RUNNER_TEMP/build.log"
           if cargo build --release --locked ${{ steps.secrets.outputs.engine == 'true' && '--features cpp-engine' || '' }} > "$log" 2>&1; then
@@ -481,6 +489,8 @@ jobs:
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
           REEL_CATALOG_URL: ${{ secrets.REEL_CATALOG_URL }}
           REEL_CATALOG_KEY: ${{ secrets.REEL_CATALOG_KEY }}
+          REEL_POSTHOG_KEY: ${{ secrets.REEL_POSTHOG_KEY }}
+          REEL_POSTHOG_HOST: ${{ secrets.REEL_POSTHOG_HOST }}
         run: |
           # Git Bash puts its coreutils `link` (hard links) ahead of MSVC's
           # on PATH; point rustc at the one next to cl.exe.

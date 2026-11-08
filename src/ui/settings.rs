@@ -1,6 +1,6 @@
 //! Settings (app menu → Settings…, ⌘, or the home screen's gear): the old
 //! desktop Settings dialog. So far its Updates group (check, download,
-//! restart) and the version; language, appearance and the editing
+//! restart), the usage-data switch (Privacy) and the version; language, appearance and the editing
 //! defaults are still to come (docs/PARITY.md). Found and downloaded
 //! versions also show in the update dialog (ui/update_dialog.rs).
 
@@ -11,7 +11,7 @@ use gpui::{
 use crate::editor::Editor;
 use crate::theme;
 use crate::ui::icons::Icon;
-use crate::ui::widgets::pill_button;
+use crate::ui::widgets::{pill_button, switch};
 use crate::updater::{self, Status};
 
 const MAX_WIDTH: f32 = 600.;
@@ -106,6 +106,7 @@ impl Editor {
                             .p(px(20.))
                             .pb(px(4.))
                             .child(group("UPDATES", vec![self.update_row(cx)]))
+                            .child(group("PRIVACY", vec![self.usage_data_row(cx)]))
                             .child(group(
                                 "ABOUT",
                                 vec![
@@ -122,6 +123,30 @@ impl Editor {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Anonymous usage events (src/analytics.rs): on by default, off stops
+    /// them at once and drops what's still waiting.
+    fn usage_data_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.prefs.share_usage_data;
+        row(
+            Icon::Speedometer,
+            "Share anonymous usage data",
+            Some(
+                "Which features get used, to make Reel Studio better. Never your \
+                 media, projects or text."
+                    .into(),
+            ),
+        )
+        .child(
+            switch("settings-usage-data", on, false).on_click(cx.listener(move |ed, _, _, cx| {
+                ed.prefs.share_usage_data = !on;
+                ed.prefs.save();
+                crate::analytics::set_enabled(!on);
+                cx.notify();
+            })),
+        )
+        .into_any_element()
     }
 
     /// App updates: what the updater is doing, and the one button for it.
