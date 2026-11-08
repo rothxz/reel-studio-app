@@ -16,6 +16,7 @@ use crate::clip_edits::crop_of;
 use crate::crop::{self, CropBox, Handle, MAX_STRAIGHTEN, RATIOS};
 use crate::decoder;
 use crate::editor::{Drag, Editor, SliderFn};
+use crate::i18n::t;
 use crate::model::{Micros, SECOND};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -394,7 +395,7 @@ impl Editor {
                 .w(px(LABEL_WIDTH))
                 .text_size(px(theme::XS))
                 .text_color(theme::text_secondary())
-                .child(text)
+                .child(crate::i18n::ts(text))
         };
         let ratio_button = |i: Option<usize>, selected: bool| {
             let (text, glyph): (SharedString, AnyElement) = match i {
@@ -473,7 +474,7 @@ impl Editor {
                         } else {
                             theme::text_secondary()
                         })
-                        .child(text),
+                        .child(crate::i18n::ts(text)),
                 )
                 .on_click(cx.listener(move |ed, _, _, cx| ed.pick_crop_ratio(i, cx)))
         };
@@ -590,7 +591,7 @@ impl Editor {
                         div()
                             .text_size(px(theme::SM))
                             .text_color(theme::text_secondary())
-                            .child("Reset"),
+                            .child(t("Reset")),
                     )
                     .on_click(cx.listener(|ed, _, _, cx| ed.reset_crop(cx))),
             )
@@ -655,7 +656,7 @@ impl Editor {
                                         .flex_1()
                                         .text_size(px(theme::MD))
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Crop"),
+                                        .child(t("Crop")),
                                 )
                                 .child(
                                     icon_button("crop-close", Icon::Close, "Cancel crop")
@@ -689,7 +690,7 @@ impl Editor {
                     div()
                         .text_size(px(theme::SM))
                         .text_color(theme::text_tertiary())
-                        .child("Loading…"),
+                        .child(t("Loading…")),
                 )
                 .into_any_element();
         };

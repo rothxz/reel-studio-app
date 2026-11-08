@@ -114,7 +114,7 @@ panel, sheet and gesture is a rewrite in Rust. The biggest items:
 | Audio playback + waveform | Web Audio | `cpal` + the engine's `AudioMixer` |
 | AI tools (captions, Remove BG, …) | Transformers.js workers | `ort` / `candle`, or the native models the phone apps already use |
 | Widgets (inputs, sliders, menus, dialogs) | React components | `gpui-component` (0.9) covers most; GPUI is still pre-1.0 and its API moves. |
-| Languages incl. Khmer | i18n + Kantumruy Pro | Bundle fonts; GPUI shapes text with Core Text / DirectWrite, so Khmer should work but is unverified. |
+| Languages incl. Khmer | i18n + Kantumruy Pro | `src/i18n.rs` with the app's dictionaries compiled in. Kantumruy Pro bundled: the whole UI uses it while the language is Khmer (`theme::font_body` / `font_mono`); Chinese renders through the system's font fallback (verified on macOS). |
 | Auto-update, installers | electron-builder + electron-updater | Done for macOS: `packaging/macos/bundle.sh` (app, dmg, zip), `src/updater.rs`, `.github/workflows/release.yml`. Windows / Linux still to do. |
 
 **Suggested path if we go ahead:**
@@ -194,24 +194,23 @@ Electron build. Without them the app is ad-hoc signed: it runs and
 updates, but Gatekeeper asks on first open, and macOS forgets folder
 permissions after every update (each ad-hoc build is a new identity).
 
-**Analytics** (`src/analytics.rs`): anonymous usage events to the phone
-app's PostHog project, with its event names, so desktop shows up on the
-same funnel and dashboards (`platform` = `macos` / `windows` / `linux`).
-`REEL_POSTHOG_KEY` / `REEL_POSTHOG_HOST` come from the app checkout's
-`.env` (`EXPO_PUBLIC_POSTHOG_*`) or the optional `release` secrets of the
-same names; without a key nothing is sent. Only release builds send
-(`REEL_ANALYTICS_IN_DEV=1` to test from a local build, `REEL_ANALYTICS=0`
-to switch it off); local builds print `[analytics] event {props}` to
-stderr (`REEL_ANALYTICS_LOG=0` silences it). Settings → Privacy → "Share
-anonymous usage data" (on by default) stops it at once. Events carry a
-random install id (`<data>/analytics-id`), app version, OS and CPU, and
-counts or catalog names; paths, URLs, project names and typed text are
-never sent (`sanitize` drops them as a backstop), GeoIP is off and no
-person profile is made. Edit events come from one place: `Editor::edit`
-hands each edit's before / after document to `EditorSession`, which
-derives clip / text / sticker / audio / effect / filter / transition
-events and rate-limits timeline gestures. A background thread batches
-(≤ 50, every 30 s or 20 waiting, 200 kept offline) and flushes on quit.
+**Analytics** (`src/analytics.rs`; what users are told:
+[ANALYTICS.md](ANALYTICS.md)): anonymous usage events to the phone app's
+PostHog project, with its event names (`platform` = `macos` / `windows` /
+`linux`). `REEL_POSTHOG_KEY` / `REEL_POSTHOG_HOST` come from the app
+checkout's `.env` (`EXPO_PUBLIC_POSTHOG_*`) or the optional `release`
+secrets of the same names; without a key nothing is sent. Only release
+builds send (`REEL_ANALYTICS_IN_DEV=1` to test from a local build, which
+sends to the live project; `REEL_ANALYTICS=0` switches it off); local
+builds print `[analytics] event {props}` to stderr (`REEL_ANALYTICS_LOG=0`
+silences it). Edit events come from one place: `Editor::edit` hands each
+edit's before / after document to `EditorSession`, whose `edit_events`
+derives the clip / text / sticker / audio / effect / filter / transition
+events (extend it rather than adding call sites; reuse the phone app's
+event names). `sanitize` drops paths, URLs, emails and long text as a
+backstop. A background thread batches (≤ 50, every 30 s or 20 waiting,
+200 kept offline) and flushes on quit. If you add an event, update the
+list users read in ANALYTICS.md.
 
 **Keeping a public repo clean**: no keys, `.env` files, certificates or
 private sources are ever committed (the build reads them from the

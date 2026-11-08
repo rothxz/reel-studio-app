@@ -217,7 +217,7 @@ impl Editor {
                 .border_1()
                 .border_color(theme::chip_border())
                 .text_size(px(13.))
-                .line_height(px(18.))
+                .line_height(theme::line_height(18., 13.))
                 .text_color(theme::text())
                 .child(self.text_field.clone())
                 .into_any_element(),

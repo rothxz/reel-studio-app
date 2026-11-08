@@ -183,7 +183,7 @@ impl Editor {
             .flex()
             .flex_col()
             .justify_between()
-            .font_family(theme::FONT_MONO)
+            .font_family(theme::font_mono())
             .text_size(px(9.))
             .text_color(theme::text_tertiary())
             .child("10×")
@@ -388,7 +388,7 @@ fn speed_label(s: f64) -> String {
 
 fn mono(s: String, color: impl Into<Hsla>) -> gpui::Div {
     div()
-        .font_family(theme::FONT_MONO)
+        .font_family(theme::font_mono())
         .text_size(px(theme::XS))
         .text_color(color)
         .child(s)

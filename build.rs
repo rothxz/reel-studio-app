@@ -6,7 +6,8 @@
 // - The app's public client config and the filter list, read from the app
 //   checkout at REEL_APP_DIR: the asset host (tile previews on R2), the
 //   catalog database's URL and publishable key (the served effects table),
-//   and the filter catalog + its preview manifest. They are compiled into
+//   the filter catalog + its preview manifest, and the UI dictionaries of
+//   every language (src/i18n.rs). They are compiled into
 //   the binary; without a checkout the app builds with none of them (an
 //   exported REEL_ASSETS_URL / REEL_CATALOG_URL / REEL_CATALOG_KEY still
 //   works, at build or at run time).
@@ -114,6 +115,167 @@ fn app_inputs() {
     std::fs::write(out.join("filter_catalog.json"), catalog).unwrap();
     std::fs::write(out.join("filter_previews.json"), previews).unwrap();
     std::fs::write(out.join("filter_packages.json"), packages).unwrap();
+
+    // The UI dictionaries (src/i18n.rs): every language's strings as one
+    // JSON object, `{ "km": { "settings.title": "…", … }, … }` ("{}"
+    // without a checkout: the app is then English only).
+    let locales = app.as_ref().map(|a| a.join("src/i18n/locales"));
+    let mut json = String::from("{");
+    for code in ["en", "km", "vi", "zh", "id"] {
+        let Some(entries) = locales
+            .as_ref()
+            .and_then(|d| watched_read(&d.join(format!("{code}.ts"))))
+            .and_then(|ts| ts_dictionary(&ts))
+        else {
+            continue;
+        };
+        if json.len() > 1 {
+            json.push(',');
+        }
+        json.push_str(&format!("\"{code}\":{{"));
+        for (i, (key, text)) in entries.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!("{}:{}", json_string(key), json_string(text)));
+        }
+        json.push('}');
+    }
+    json.push('}');
+    std::fs::write(out.join("locales.json"), json).unwrap();
+}
+
+/// A dictionary file's object literal (`export const xx = { a: { b: "…" } }`)
+/// flattened to dotted keys: `("a.b", "…")`. Keys are bare or quoted; values
+/// are quoted strings, maybe joined with `+`. None if it doesn't parse.
+fn ts_dictionary(ts: &str) -> Option<Vec<(String, String)>> {
+    let s: Vec<char> = ts.chars().collect();
+    let skip = |mut i: usize| -> usize {
+        while i < s.len() {
+            if s[i].is_whitespace() {
+                i += 1;
+            } else if s[i] == '/' && s.get(i + 1) == Some(&'/') {
+                while i < s.len() && s[i] != '\n' {
+                    i += 1;
+                }
+            } else if s[i] == '/' && s.get(i + 1) == Some(&'*') {
+                i += 2;
+                while i + 1 < s.len() && !(s[i] == '*' && s[i + 1] == '/') {
+                    i += 1;
+                }
+                i += 2;
+            } else {
+                break;
+            }
+        }
+        i
+    };
+    let string = |mut i: usize| -> Option<(String, usize)> {
+        let quote = s[i];
+        i += 1;
+        let mut text = String::new();
+        while *s.get(i)? != quote {
+            if s[i] == '\\' {
+                let c = *s.get(i + 1)?;
+                text.push(match c {
+                    'n' => '\n',
+                    't' => '\t',
+                    other => other,
+                });
+                i += 2;
+            } else {
+                text.push(s[i]);
+                i += 1;
+            }
+        }
+        Some((text, i + 1))
+    };
+    let start = ts.find("= {")?;
+    let mut i = ts[..start].chars().count() + 3;
+    let mut path: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    loop {
+        i = skip(i);
+        match *s.get(i)? {
+            '}' => {
+                i = skip(i + 1);
+                if path.pop().is_none() {
+                    return Some(out);
+                }
+                if s.get(i) == Some(&',') {
+                    i += 1;
+                }
+                continue;
+            }
+            '"' | '\'' => {
+                let (key, next) = string(i)?;
+                path.push(key);
+                i = next;
+            }
+            _ => {
+                let begin = i;
+                while i < s.len() && (s[i].is_alphanumeric() || s[i] == '_' || s[i] == '$') {
+                    i += 1;
+                }
+                if i == begin {
+                    return None;
+                }
+                path.push(s[begin..i].iter().collect());
+            }
+        }
+        i = skip(i);
+        if *s.get(i)? != ':' {
+            return None;
+        }
+        i = skip(i + 1);
+        if *s.get(i)? == '{' {
+            i += 1;
+            continue;
+        }
+        let mut text = String::new();
+        loop {
+            if !matches!(*s.get(i)?, '"' | '\'' | '`') {
+                return None;
+            }
+            let (part, next) = string(i)?;
+            text.push_str(&part);
+            i = skip(next);
+            if s.get(i) == Some(&'+') {
+                i = skip(i + 1);
+                continue;
+            }
+            break;
+        }
+        let key = path.pop()?;
+        out.push((
+            path.iter()
+                .chain([&key])
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("."),
+            text,
+        ));
+        if s.get(i) == Some(&',') {
+            i += 1;
+        }
+    }
+}
+
+/// `text` as a JSON string literal.
+fn json_string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// What a release build stamps in (the release workflow exports both):

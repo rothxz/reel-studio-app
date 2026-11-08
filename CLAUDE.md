@@ -66,13 +66,17 @@ tools/shot.sh out.png  # screenshot the app window without focusing it
 src/main.rs        window, fonts, app menu (built from the shortcut table)
 src/editor.rs      Editor state: document, edits (+ magnet), undo, playback,
                    preview, drags, panel layout, projects session, autosave
+src/i18n.rs        UI language: the app's dictionaries (compiled in by
+                   build.rs), `t("English")` / `tf` / `ts` look up by
+                   English text, `tk` / `plural` by key; Settings →
+                   Language, "Same as device"
 src/shortcuts.rs   the shortcut table → key bindings, menu, tooltips, dialog
 src/pinch.rs       trackpad pinch → timeline zoom (AppKit magnify
                    monitor; gpui drops the event)
 src/analytics.rs   anonymous usage events → PostHog (the phone app's
                    project and event names): batching thread, privacy
                    filter, events derived from each edit; release
-                   builds only, Settings switch
+                   builds only, Settings switch (docs/ANALYTICS.md)
 src/history.rs     undo / redo (document snapshots, coalesced per gesture)
 src/model.rs       Project document (serde): same JSON as the app; unknown fields
                    kept in `extra`; clip edits + `with_magnet`
@@ -119,7 +123,9 @@ src/effects/       video effects + filters in the preview: shader packages
                    (stack), Metal source (msl: the effect dialect →
                    MSL, our fx_/fl_ helpers), the Metal renderer and its
                    render thread
-src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono)
+src/theme.rs       palette, fonts (bundled Nunito + IBM Plex Mono; Kantumruy
+                   Pro for all UI text in Khmer: `font_body()` /
+                   `font_mono()`, `line_height`)
 src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    header, home, browser, fx (effect / filter grids, the
                    effect clip's settings, Adjust sliders, their edits),
@@ -171,7 +177,7 @@ thumbnails, waveform, audio out), and the editor state out of `editor.rs`.
 | Clip time math | engine `Timeline.h` (use it through the shim, don't re-implement) |
 | Export | engine `Engine::StartExport`; web reference `modules/video-engine/src/web/exportJob.ts`; native `ios/VideoToolboxEncoder.mm`, `MetalCompositor.mm` |
 | AI agent panel | `src/features/agent/` (tools, providers, snapshot) |
-| Strings | `src/i18n/locales/en.ts` (labels: reuse the exact English; 5 locales later) |
+| Strings | `src/i18n/locales/en.ts` (labels: reuse the exact English, which is also how `src/i18n.rs` finds the translation) |
 | Colours, spacing, type | `src/theme/palettes.ts` (dark), `tokens.ts` (spacing 4/8/12/16/20/24; Nunito + IBM Plex Mono) |
 | Electron shell behaviour (title bar, updates, LLM proxy, key vault) | `desktop/main.mjs`, `desktop/README.md` |
 

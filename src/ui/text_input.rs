@@ -731,7 +731,7 @@ impl Element for TextElement {
         let line_height = window.line_height();
         let placeholder = input.content.is_empty();
         let text: SharedString = if placeholder {
-            input.placeholder.clone()
+            crate::i18n::ts(input.placeholder.clone())
         } else {
             input.content.clone().into()
         };

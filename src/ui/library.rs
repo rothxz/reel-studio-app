@@ -25,6 +25,7 @@ use gpui::{
 };
 
 use crate::editor::Editor;
+use crate::i18n::t;
 use crate::library::{
     self, MUSIC_MOODS, MusicQuery, MusicTrack, STICKER_PICKS, SoundEffect, SoundQuery, StickerItem,
     StickerKind,
@@ -681,7 +682,7 @@ impl Editor {
                     .flex_1()
                     .min_w_0()
                     .text_size(px(theme::XS))
-                    .line_height(px(16.))
+                    .line_height(theme::line_height(16., theme::XS))
                     .text_color(theme::text())
                     .child(input.clone()),
             )
@@ -713,7 +714,7 @@ impl Editor {
             .text_size(px(theme::SM))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme::text())
-            .child(label.into())
+            .child(crate::i18n::ts(label))
             .into_any_element()
     }
 
@@ -817,7 +818,7 @@ impl Editor {
                                 .justify_center()
                                 .text_size(px(theme::XS))
                                 .text_color(theme::text_tertiary())
-                                .child("Loading…"),
+                                .child(t("Loading…")),
                         )
                     })
                     .into_any_element()
@@ -1123,7 +1124,7 @@ impl Editor {
                             .truncate()
                             .text_size(px(theme::SM))
                             .text_color(theme::text())
-                            .child(title),
+                            .child(crate::i18n::ts(title)),
                     )
                     .child(
                         div()
@@ -1190,7 +1191,7 @@ impl Editor {
                         .text_size(px(theme::SM))
                         .text_color(theme::text())
                         .text_center()
-                        .child(label),
+                        .child(crate::i18n::ts(label)),
                 )
                 .child(
                     div()

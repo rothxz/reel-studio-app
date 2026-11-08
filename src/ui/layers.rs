@@ -11,6 +11,7 @@ use gpui::{
 
 use crate::clip_edits::{LayerItem, LayerKey};
 use crate::editor::{Drag, Editor};
+use crate::i18n::t;
 use crate::model::{Clip, Micros};
 use crate::theme;
 use crate::ui::icons::Icon;
@@ -223,7 +224,7 @@ impl Editor {
                             } else {
                                 theme::text()
                             })
-                            .child(label),
+                            .child(crate::i18n::ts(label)),
                     )
                     .when(!disabled, |d| {
                         d.cursor_pointer()
@@ -276,7 +277,7 @@ impl Editor {
                             .flex_1()
                             .text_size(px(theme::SM))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Arrange layers"),
+                            .child(t("Arrange layers")),
                     )
                     .child(
                         pill_button("layers-done", "Done", false)
@@ -319,7 +320,7 @@ impl Editor {
                     .justify_center()
                     .text_size(px(theme::SM))
                     .text_color(theme::text_secondary())
-                    .child("Press and drag to arrange layers"),
+                    .child(t("Press and drag to arrange layers")),
             )
             .into_any_element()
     }
@@ -388,7 +389,7 @@ impl Editor {
                     .text_size(px(9.))
                     .text_color(theme::text())
                     .truncate()
-                    .child(label),
+                    .child(crate::i18n::ts(label)),
             )
             .into_any_element()
     }

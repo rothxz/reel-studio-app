@@ -8,6 +8,7 @@ use gpui::{Context, FontWeight, MouseButton, Window, div, prelude::*, px};
 
 use crate::editor::{Editor, HEADER_HEIGHT, PopupItem};
 use crate::export;
+use crate::i18n::t;
 use crate::prefs::RESOLUTIONS;
 use crate::shortcuts::{self, Shortcut};
 use crate::theme;
@@ -116,10 +117,10 @@ impl Editor {
                     .bg(theme::chip_bg())
                     .child(
                         div()
-                            .font_family(theme::FONT_MONO)
+                            .font_family(theme::font_mono())
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(theme::XXS))
-                            .child("BETA"),
+                            .child(t("BETA")),
                     ),
             )
             .child(
@@ -143,7 +144,7 @@ impl Editor {
                                 div()
                                     .text_size(px(theme::XS))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("AI agent"),
+                                    .child(t("AI agent")),
                             ),
                     )
                     .child(
@@ -160,7 +161,7 @@ impl Editor {
                                 div()
                                     .text_size(px(theme::XS))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Shortcuts"),
+                                    .child(t("Shortcuts")),
                             ),
                     )
                     .child(
@@ -228,7 +229,7 @@ impl Editor {
                                     .text_size(px(theme::XS))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme::app_bg())
-                                    .child("Export"),
+                                    .child(t("Export")),
                             ),
                     ),
             )

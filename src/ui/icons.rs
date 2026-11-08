@@ -87,6 +87,7 @@ icons! {
     CloudDownload => (ION, 0xf258),
     RefreshCircle => (ION, 0xf516),
     InformationCircle => (ION, 0xf399),
+    Language => (ION, 0xf3aa),
     Ellipsis => (ION, 0xf2ce),
     Pencil => (ION, 0xf49c),
     Checkbox => (ION, 0xf21b),
