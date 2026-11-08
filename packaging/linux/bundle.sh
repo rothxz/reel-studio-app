@@ -24,16 +24,28 @@ out=${4:?out dir}
 
 NAME="Reel Studio"
 ID=reel-studio
-# appimagetool, pinned: the release and each build's SHA-256.
+# appimagetool and the AppImage runtime it puts in front of the image,
+# both pinned: the release, each build's SHA-256 and its release asset id.
+# The id is the API's download route, for when github.com's release-download
+# redirect fails for a file (it 504'd for some files, Nov 2026, while the
+# assets themselves were fine). Given --runtime-file, appimagetool downloads
+# nothing itself (it would fetch the moving `continuous` runtime).
 TOOL_VERSION=1.9.1
+RUNTIME_VERSION=20251108
 case "$arch" in
   x64)
     tool_arch=x86_64
     TOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+    TOOL_ASSET=324406736
+    RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+    RUNTIME_ASSET=326011592
     ;;
   arm64)
     tool_arch=aarch64
     TOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+    TOOL_ASSET=324406707
+    RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+    RUNTIME_ASSET=326011362
     ;;
   *) echo "arch must be x64 or arm64" >&2; exit 1 ;;
 esac
@@ -90,14 +102,29 @@ EOF
 chmod 755 "$app/AppRun"
 
 # ---- AppImage -----------------------------------------------------------------
+# fetch <repo> <tag> <file> <asset id> <sha256> <dest>: a pinned release
+# file, from the release download or else the API, checked.
+fetch() {
+  local repo=$1 tag=$2 file=$3 asset=$4 sha=$5 dest=$6
+  if ! curl -fsSL --retry 3 --retry-all-errors -o "$dest" \
+    "https://github.com/$repo/releases/download/$tag/$file"; then
+    echo "release download of $file failed; fetching the same asset through the API" >&2
+    curl -fsSL --retry 5 --retry-all-errors -H 'Accept: application/octet-stream' -o "$dest" \
+      "https://api.github.com/repos/$repo/releases/assets/$asset"
+  fi
+  echo "$sha  $dest" | sha256sum -c -
+}
 tool="$work/appimagetool"
-curl -fsSL --retry 5 --retry-all-errors -o "$tool" \
-  "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-$tool_arch.AppImage"
-echo "$TOOL_SHA256  $tool" | sha256sum -c -
+fetch AppImage/appimagetool "$TOOL_VERSION" "appimagetool-$tool_arch.AppImage" \
+  "$TOOL_ASSET" "$TOOL_SHA256" "$tool"
 chmod 755 "$tool"
+runtime="$work/runtime-$tool_arch"
+fetch AppImage/type2-runtime "$RUNTIME_VERSION" "runtime-$tool_arch" \
+  "$RUNTIME_ASSET" "$RUNTIME_SHA256" "$runtime"
 image="$out/Reel-Studio-$version-linux-$arch.AppImage"
 # Extract-and-run: CI runners have no FUSE.
-ARCH=$tool_arch APPIMAGE_EXTRACT_AND_RUN=1 VERSION=$version "$tool" --no-appstream "$app" "$image"
+ARCH=$tool_arch APPIMAGE_EXTRACT_AND_RUN=1 VERSION=$version "$tool" --no-appstream \
+  --runtime-file "$runtime" "$app" "$image"
 chmod 755 "$image"
 
 # ---- tar.gz -------------------------------------------------------------------
