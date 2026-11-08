@@ -55,3 +55,11 @@ cpp-engine = []
 # tests there: `cargo test --features wgpu-effects`. The app still draws
 # with Metal on macOS.
 wgpu-effects = ["dep:wgpu", "dep:pollster"]
+
+# Keep target/debug small: line numbers for our crate, no debug info for
+# dependencies (full symbols for GPUI's tree cost >10 GB).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
