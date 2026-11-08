@@ -1,7 +1,8 @@
-# Checks on every pull request and push to main: format, lints and tests on
-# the Rust engine stand-in. It runs untrusted code from pull requests, so
-# it never gets a secret or the private engine checkout (the release
-# workflow builds on the C++ engine), and its token can only read.
+# Checks on every pull request and push to main, on macOS, Linux and
+# Windows: format, lints and tests on the Rust engine stand-in. It runs
+# untrusted code from pull requests, so it never gets a secret or the
+# private engine checkout (the release workflow builds on the C++ engine),
+# and its token can only read.
 name: CI
 
 on:
@@ -22,7 +23,7 @@ env:
 
 jobs:
   check:
-    name: fmt · clippy · test
+    name: macOS · fmt · clippy · test
     runs-on: macos-latest
     env:
       FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/arm64
@@ -57,6 +58,97 @@ jobs:
       # `-- -D warnings` once the existing ones are cleaned up).
       - run: cargo clippy --locked --all-targets
       - run: cargo test --locked
+      # The Linux / Windows preview renderer (wgpu), here on Metal: the
+      # same composition checks as the Metal renderer's.
+      - run: "cargo test --locked --features wgpu-effects effects::"
 
       - name: Check packaging scripts
-        run: bash -n packaging/macos/*.sh packaging/*.sh
+        run: bash -n packaging/macos/*.sh packaging/linux/*.sh packaging/windows/*.sh packaging/*.sh
+
+  linux:
+    name: Linux · clippy · test
+    runs-on: ubuntu-22.04
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}/.ffmpeg/linux-x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      # gpui (X11, Wayland, xkbcommon), ALSA for sound, FFmpeg's build;
+      # Mesa's software Vulkan (lavapipe) so the preview renderer's tests
+      # run on a GPU-less runner.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential nasm pkg-config clang zlib1g-dev libbz2-dev \
+            libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers
+
+      - name: Cache FFmpeg
+        id: ffmpeg
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ env.FFMPEG_DIR }}
+          key: ffmpeg-linux-x64-ubuntu-22.04-${{ hashFiles('packaging/linux/build-ffmpeg.sh') }}
+
+      - name: Build FFmpeg (static, LGPL)
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: packaging/linux/build-ffmpeg.sh "$FFMPEG_DIR"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked
+
+  windows:
+    name: Windows · clippy · test
+    runs-on: windows-2022
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}\.ffmpeg\windows-x64
+      # bindgen (FFmpeg's bindings) finds libclang here.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      - name: Cache FFmpeg
+        id: ffmpeg
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ env.FFMPEG_DIR }}
+          key: ffmpeg-windows-x64-msvc-${{ hashFiles('packaging/windows/build-ffmpeg.sh') }}
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        with:
+          msystem: MSYS
+          path-type: inherit
+          update: false
+          install: make diffutils nasm
+
+      - name: Build FFmpeg (static, LGPL, MSVC)
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          # MSYS2's link.exe (coreutils) would shadow MSVC's.
+          mv /usr/bin/link.exe /usr/bin/link.exe.msys
+          packaging/windows/build-ffmpeg.sh "$(cygpath -u "$FFMPEG_DIR")"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked

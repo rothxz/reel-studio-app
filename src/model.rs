@@ -348,7 +348,7 @@ impl Clip {
         }
         self.source
             .as_deref()
-            .and_then(|s| s.rsplit('/').next())
+            .and_then(|s| s.rsplit(['/', '\\']).next())
             .map(str::to_owned)
             .unwrap_or_else(|| self.kind.clone())
     }

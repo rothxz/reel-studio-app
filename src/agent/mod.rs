@@ -39,6 +39,10 @@ pub mod keys;
 pub mod llm;
 pub mod local_voice;
 pub mod movie;
+// On macOS only its tests build it (the voice picking is plain code).
+#[cfg(any(not(target_os = "macos"), test))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub mod os_voice;
 pub mod providers;
 pub mod sfx;
 pub mod skills;

@@ -27,3 +27,4 @@ pub mod timeline_edit;
 pub mod toolbar;
 pub mod visual;
 pub mod widgets;
+pub mod window_chrome;

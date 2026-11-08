@@ -5,7 +5,6 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1204,7 +1203,7 @@ impl Editor {
         if self.screen != Screen::Editor {
             return;
         }
-        let dir = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+        let dir = crate::prefs::home_dir();
         let name = format!("{}.json", self.project.name);
         let rx = cx.prompt_for_new_path(&dir, Some(&name));
         let json = serde_json::to_string_pretty(&self.project).unwrap_or_default();
@@ -2755,6 +2754,8 @@ impl Render for Editor {
                 );
         }
         root.children(self.render_overlays(window.viewport_size(), cx))
+            // Linux, when the window decorates itself: its resize edges.
+            .children(crate::ui::window_chrome::resize_edges(window))
     }
 }
 

@@ -413,6 +413,11 @@ fn cover_source(project: &Project) -> Option<CoverSource> {
         .and_then(|u| u.as_str())
     {
         let path = uri.strip_prefix("file://").unwrap_or(uri);
+        // file:///C:/… on Windows: no slash before the drive.
+        let path = match path.as_bytes() {
+            [b'/', _, b':', ..] if cfg!(windows) => &path[1..],
+            _ => path,
+        };
         if !path.is_empty() {
             return Some(CoverSource::Still(path.to_string()));
         }

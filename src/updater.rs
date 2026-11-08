@@ -6,16 +6,24 @@
 //! Like the old desktop shell: it checks on launch and every 4 h, never
 //! downloads by itself (Settings → App updates → Download), then asks to
 //! restart; "Later" installs when the app quits. Installing swaps the
-//! downloaded bundle in for the running one (same folder), so it needs an
-//! app bundle in a folder the user can write to: not a `cargo run`, nor
-//! an app macOS runs from a quarantine copy (open it from Applications).
+//! download in for the running app (same folder), so it needs an installed
+//! copy in a folder the user can write to, never a `cargo run`:
 //!
-//! The download must match the manifest's hash, be a signed bundle with
-//! our bundle id and the promised version, and, when this app is signed
-//! by a team (Developer ID), be signed by the same team.
+//! - macOS: an app bundle (zipped), not one macOS runs from a quarantine
+//!   copy (open it from Applications). It must be a signed bundle with our
+//!   bundle id and the promised version, and, when this app is signed by a
+//!   team (Developer ID), signed by the same team.
+//! - Linux: the AppImage itself (`$APPIMAGE`, the file it runs from).
+//! - Windows: `reel-studio.exe` from the release zip (unpacked with the
+//!   system's `tar`); the running one is renamed aside (Windows lets a
+//!   running program be renamed, not replaced) and removed next launch.
+//!
+//! Every download must match the manifest's SHA-256 (the manifest comes
+//! over HTTPS from the same release).
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 use std::time::Duration;
 
@@ -118,6 +126,9 @@ impl Updater {
                 None
             }
         };
+        if let Some(target) = &target {
+            clean_up_after_install(target);
+        }
         cx.new(|cx| {
             if target.is_some() {
                 cx.spawn(async move |this, cx| {
@@ -231,6 +242,12 @@ impl Updater {
             return;
         }
         if self.install_staged() {
+            // An AppImage runs from a mount of itself: start the file.
+            if cfg!(target_os = "linux")
+                && let Some(target) = &self.target
+            {
+                cx.set_restart_path(target.clone());
+            }
             cx.restart();
         } else {
             cx.notify();
@@ -246,9 +263,7 @@ impl Updater {
         match install(&app, &target) {
             Ok(()) => {
                 self.status = Status::Installed;
-                if let Some(dir) = app.parent().and_then(Path::parent) {
-                    let _ = std::fs::remove_dir_all(dir);
-                }
+                let _ = std::fs::remove_dir_all(crate::prefs::data_dir().join("updates"));
                 true
             }
             Err(e) => {
@@ -389,29 +404,43 @@ fn find_update() -> Result<Option<Found>> {
             .body_mut()
             .read_to_string()?,
     )?;
-    let os = macos_version();
+    let os = os_version();
     Ok(pick(&manifest, &version, VERSION, os.as_deref())?.map(|file| Found { version, file }))
 }
 
-fn macos_version() -> Option<String> {
-    let out = Command::new("sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()?;
-    Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
+/// The macOS version (the manifest's minimum applies to macOS only).
+fn os_version() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 // ---- downloading ----------------------------------------------------------
 
-/// Downloads the zip, checks its hash, unpacks it and checks the bundle.
-/// Returns the new app bundle (inside the data folder's `updates/`).
+/// Downloads the update, checks its hash, unpacks it and checks it.
+/// Returns the new app (inside the data folder's `updates/`).
 fn fetch(found: &Found, progress: &dyn Fn(f32)) -> Result<PathBuf> {
     let dir = crate::prefs::data_dir()
         .join("updates")
         .join(&found.version);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
-    let zip = dir.join("update.zip");
+    // Named as released (`….zip`, `….AppImage`).
+    let name = found
+        .file
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty() && !n.contains(['\\', ':']))
+        .unwrap_or("update.zip");
+    let zip = dir.join(name);
 
     let mut response = crate::assets::download_agent()
         .get(&found.file.url)
@@ -455,26 +484,83 @@ fn fetch(found: &Found, progress: &dyn Fn(f32)) -> Result<PathBuf> {
         found.file.sha256
     );
 
+    unpack(&zip, &dir, &found.version)
+}
+
+/// The app bundle in the zip, checked.
+#[cfg(target_os = "macos")]
+fn unpack(zip: &Path, dir: &Path, version: &str) -> Result<PathBuf> {
     let unpacked = dir.join("app");
     run(Command::new("ditto")
         .arg("-x")
         .arg("-k")
-        .arg(&zip)
+        .arg(zip)
         .arg(&unpacked))?;
-    let _ = std::fs::remove_file(&zip);
+    let _ = std::fs::remove_file(zip);
     let mut apps = std::fs::read_dir(&unpacked)?
         .filter_map(|e| Some(e.ok()?.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "app"));
     let app = apps.next().context("no app in the download")?;
     ensure!(apps.next().is_none(), "more than one app in the download");
-    verify_bundle(&app, &found.version)?;
+    verify_bundle(&app, version)?;
     Ok(app)
 }
+
+/// The AppImage is the download.
+#[cfg(target_os = "linux")]
+fn unpack(file: &Path, _dir: &Path, _version: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755))?;
+    Ok(file.to_path_buf())
+}
+
+/// `reel-studio.exe` from the zip (Windows 10+ ships bsdtar, which reads
+/// zips).
+#[cfg(target_os = "windows")]
+fn unpack(zip: &Path, dir: &Path, _version: &str) -> Result<PathBuf> {
+    let unpacked = dir.join("app");
+    std::fs::create_dir_all(&unpacked)?;
+    let tar = std::env::var_os("SystemRoot")
+        .map(|r| PathBuf::from(r).join("System32").join("tar.exe"))
+        .filter(|t| t.exists())
+        .unwrap_or_else(|| "tar.exe".into());
+    run(Command::new(tar)
+        .arg("-xf")
+        .arg(zip)
+        .arg("-C")
+        .arg(&unpacked))?;
+    let _ = std::fs::remove_file(zip);
+    // At the top or one folder down ("Reel Studio/reel-studio.exe").
+    let mut found = None;
+    for entry in std::fs::read_dir(&unpacked)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let exe = path.join(WINDOWS_EXE);
+            if exe.is_file() {
+                found = Some(exe);
+            }
+        } else if path.file_name().is_some_and(|n| n == WINDOWS_EXE) {
+            found = Some(path);
+        }
+    }
+    found.context("no reel-studio.exe in the download")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn unpack(_: &Path, _: &Path, _: &str) -> Result<PathBuf> {
+    bail!("no updates on this system")
+}
+
+/// The released Windows program's name (cargo builds reel-studio-gpui.exe,
+/// so a development build never updates itself).
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_EXE: &str = "reel-studio.exe";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run(cmd: &mut Command) -> Result<String> {
     let out = cmd.output().with_context(|| format!("{cmd:?}"))?;
     ensure!(
@@ -486,6 +572,7 @@ fn run(cmd: &mut Command) -> Result<String> {
 }
 
 /// A key of a bundle's Info.plist.
+#[cfg(target_os = "macos")]
 fn plist_value(app: &Path, key: &str) -> Result<String> {
     run(Command::new("plutil")
         .args(["-extract", key, "raw", "-o", "-"])
@@ -493,6 +580,7 @@ fn plist_value(app: &Path, key: &str) -> Result<String> {
 }
 
 /// The Team ID a bundle is signed by (None: ad-hoc or unsigned).
+#[cfg(target_os = "macos")]
 fn team_id(app: &Path) -> Option<String> {
     let out = Command::new("codesign").arg("-dv").arg(app).output().ok()?;
     // codesign -d prints its details on stderr.
@@ -506,6 +594,7 @@ fn team_id(app: &Path) -> Option<String> {
 
 /// The new bundle is ours (bundle id), the promised version, intact
 /// (signature), and from the same team as this one when it has a team.
+#[cfg(target_os = "macos")]
 fn verify_bundle(app: &Path, version: &str) -> Result<()> {
     let current = std::env::current_exe()?
         .ancestors()
@@ -539,22 +628,35 @@ fn verify_bundle(app: &Path, version: &str) -> Result<()> {
 
 // ---- installing -----------------------------------------------------------
 
-/// The running bundle when updates can replace it: an `.app`, not a copy
-/// macOS runs from a quarantine folder (App Translocation), in a folder
-/// this user can write to.
+/// The running app when updates can replace it (see the module comment):
+/// in a folder this user can write to.
 pub fn install_target(app_path: Option<PathBuf>) -> Result<PathBuf, &'static str> {
-    if !cfg!(target_os = "macos") {
-        return Err("updates are macOS only for now");
-    }
-    let app = app_path
-        .filter(|p| p.extension().is_some_and(|e| e == "app"))
-        .ok_or("not running from an app bundle")?;
-    if app
-        .components()
-        .any(|c| c.as_os_str() == "AppTranslocation")
-    {
-        return Err("running from a quarantine copy: move the app to Applications");
-    }
+    let app = if cfg!(target_os = "macos") {
+        let app = app_path
+            .filter(|p| p.extension().is_some_and(|e| e == "app"))
+            .ok_or("not running from an app bundle")?;
+        if app
+            .components()
+            .any(|c| c.as_os_str() == "AppTranslocation")
+        {
+            return Err("running from a quarantine copy: move the app to Applications");
+        }
+        app
+    } else if cfg!(target_os = "linux") {
+        std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+            .ok_or("not running from an AppImage")?
+    } else if cfg!(target_os = "windows") {
+        app_path
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("reel-studio.exe"))
+            })
+            .ok_or("not an installed copy (reel-studio.exe)")?
+    } else {
+        return Err("no updates on this system");
+    };
     let parent = app.parent().ok_or("no folder")?;
     let probe = parent.join(format!(".reel-update-probe-{}", std::process::id()));
     std::fs::File::create(&probe).map_err(|_| "the app's folder isn't writable")?;
@@ -562,9 +664,19 @@ pub fn install_target(app_path: Option<PathBuf>) -> Result<PathBuf, &'static str
     Ok(app)
 }
 
-/// Puts `new_app` where `target` is: a copy next to it first (same
-/// volume), then two renames, rolled back when the second fails.
+/// Puts the downloaded app where `target` is.
 pub fn install(new_app: &Path, target: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        install_bundle(new_app, target)
+    } else {
+        install_file(new_app, target)
+    }
+}
+
+/// Puts the bundle `new_app` where `target` is: a copy next to it first
+/// (same volume), then two renames, rolled back when the second fails.
+#[cfg(target_os = "macos")]
+fn install_bundle(new_app: &Path, target: &Path) -> Result<()> {
     let parent = target.parent().context("no folder")?;
     let name = target
         .file_name()
@@ -589,6 +701,57 @@ pub fn install(new_app: &Path, target: &Path) -> Result<()> {
     // The running binary stays readable until it exits.
     let _ = std::fs::remove_dir_all(&outgoing);
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_bundle(_: &Path, _: &Path) -> Result<()> {
+    bail!("app bundles are macOS only")
+}
+
+/// The file the running app is renamed to while a new one takes its place.
+fn set_aside(target: &Path) -> Option<PathBuf> {
+    let name = target.file_name()?.to_string_lossy().into_owned();
+    Some(target.with_file_name(format!(".{name}.old")))
+}
+
+/// Puts the program file `new` where `target` is: a copy beside it first
+/// (same volume), then the running one renamed aside and the copy renamed
+/// in (put back when that fails). The old file goes now where the system
+/// allows (Linux), else at the next launch (Windows: `clean_up_after_install`).
+fn install_file(new: &Path, target: &Path) -> Result<()> {
+    let name = target
+        .file_name()
+        .context("no name")?
+        .to_string_lossy()
+        .into_owned();
+    let incoming = target.with_file_name(format!(".{name}.incoming"));
+    let old = set_aside(target).context("no name")?;
+    let _ = std::fs::remove_file(&incoming);
+    let _ = std::fs::remove_file(&old);
+    std::fs::copy(new, &incoming).context("copying the new app beside the old")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&incoming, std::fs::Permissions::from_mode(0o755))?;
+    }
+    std::fs::rename(target, &old).context("moving the old app aside")?;
+    if let Err(e) = std::fs::rename(&incoming, target) {
+        let _ = std::fs::rename(&old, target);
+        let _ = std::fs::remove_file(&incoming);
+        return Err(e).context("moving the new app in");
+    }
+    let _ = std::fs::remove_file(&old);
+    Ok(())
+}
+
+/// Removes what an install left beside the app (the old program, which
+/// Windows doesn't let go of while it runs).
+fn clean_up_after_install(target: &Path) {
+    if !cfg!(target_os = "macos")
+        && let Some(old) = set_aside(target)
+    {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 #[cfg(test)]
@@ -662,6 +825,7 @@ mod tests {
         assert!(pick(&manifest, "0.2.11", "0.2.9", None).is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn install_swaps_the_bundle_in_place() {
         let root = std::env::temp_dir().join(format!("reel-update-test-{}", std::process::id()));
@@ -685,6 +849,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn install_swaps_a_program_file_in_place() {
+        let root =
+            std::env::temp_dir().join(format!("reel-update-file-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::create_dir_all(root.join("download")).unwrap();
+        let target = root.join("app").join(WINDOWS_EXE);
+        let new = root.join("download").join(WINDOWS_EXE);
+        std::fs::write(&target, "old").unwrap();
+        std::fs::write(&new, "new").unwrap();
+        install_file(&new, &target).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        // Nothing left beside it (the old one goes at once off Windows).
+        clean_up_after_install(&target);
+        let left: Vec<_> = std::fs::read_dir(root.join("app")).unwrap().collect();
+        assert_eq!(left.len(), 1);
+        // A failed copy leaves the old one in place.
+        assert!(install_file(&root.join("missing"), &target).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn only_a_bundle_can_be_updated() {
         assert!(install_target(None).is_err());

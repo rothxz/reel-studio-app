@@ -52,13 +52,14 @@ const SEEK_NOISE: &[&[u8]] = &[
     b"Error constructing the frame RPS",
 ];
 
-/// The `va_list` a C callback receives. On x86_64 `va_list` is a
-/// one-element array, which decays to a pointer as a parameter (the
-/// bindings type it `[__va_list_tag; 1]`, the callback slot wants
-/// `*mut __va_list_tag`); on arm64 it's a plain pointer already.
-#[cfg(target_arch = "x86_64")]
+/// The `va_list` a C callback receives. On x86_64 macOS / Linux (System V)
+/// `va_list` is a one-element array, which decays to a pointer as a
+/// parameter (the bindings type it `[__va_list_tag; 1]`, the callback slot
+/// wants `*mut __va_list_tag`). Elsewhere (arm64; Windows, where it is a
+/// `char *`; Linux arm64's struct) the bindings' `va_list` is what's passed.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 type VaListArg = *mut ff::ffi::__va_list_tag;
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(all(target_arch = "x86_64", not(windows))))]
 type VaListArg = ff::ffi::va_list;
 
 /// FFmpeg's own logger, minus `SEEK_NOISE`.
@@ -149,7 +150,7 @@ impl FrameServer {
         thread::Builder::new()
             .name(format!(
                 "decode {}",
-                source.rsplit('/').next().unwrap_or("")
+                source.rsplit(['/', '\\']).next().unwrap_or("")
             ))
             .spawn(move || {
                 if let Err(e) = serve(&source, &key, max_width, rx, out) {

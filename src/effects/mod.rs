@@ -2,24 +2,76 @@
 //!
 //! - `package`: the looks' shaders as downloaded data (+ the store).
 //! - `stack`: what to draw at a time, as passes (the document → passes).
-//! - `msl`: Metal source for each pass (the dialect rewritten, helpers).
-//! - `metal`: the passes on the GPU (macOS).
+//! - `draw`: the composition of a stack on a GPU, over a small trait.
+//! - `msl` / `metal`: Metal source and renderer (macOS).
+//! - `glsl` / `portable`: GLSL source and the wgpu renderer (Linux,
+//!   Windows; on macOS with the `wgpu-effects` feature, for its tests).
 //!
 //! The editor hands the latest decoded frames (one per visible picture) and
 //! their stack to one render thread (latest wins, like the decoders) and
-//! shows what comes back. Without a GPU renderer (other platforms for now)
-//! the top picture passes through unchanged.
+//! shows what comes back. Without a GPU the top picture passes through
+//! unchanged.
 
+pub mod draw;
+#[cfg(any(not(target_os = "macos"), feature = "wgpu-effects"))]
+pub mod glsl;
 #[cfg(target_os = "macos")]
 pub mod metal;
+#[cfg(target_os = "macos")]
 pub mod msl;
 pub mod package;
+#[cfg(any(not(target_os = "macos"), feature = "wgpu-effects"))]
+pub mod portable;
 pub mod stack;
 
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::decoder::DecodedFrame;
 use stack::Stack;
+
+fn image(f: &DecodedFrame) -> draw::Image<'_> {
+    draw::Image {
+        width: f.width,
+        height: f.height,
+        bgra: &f.bgra,
+    }
+}
+
+/// The GPU renderer of this platform: Metal on macOS (wgpu there with the
+/// `wgpu-effects` feature and `REEL_GPU=wgpu`), wgpu elsewhere.
+enum Renderer {
+    #[cfg(target_os = "macos")]
+    Metal(metal::Renderer),
+    #[cfg(any(not(target_os = "macos"), feature = "wgpu-effects"))]
+    Portable(portable::Renderer),
+}
+
+impl Renderer {
+    fn new() -> Option<Self> {
+        #[cfg(all(target_os = "macos", feature = "wgpu-effects"))]
+        if std::env::var("REEL_GPU").is_ok_and(|v| v == "wgpu") {
+            return portable::Renderer::new().map(Renderer::Portable);
+        }
+        #[cfg(target_os = "macos")]
+        return metal::Renderer::new().map(Renderer::Metal);
+        #[cfg(not(target_os = "macos"))]
+        return portable::Renderer::new().map(Renderer::Portable);
+    }
+
+    fn render(
+        &mut self,
+        frames: &[draw::Image],
+        backdrop: Option<draw::Image>,
+        stack: &Stack,
+    ) -> (u32, u32, Vec<u8>) {
+        match self {
+            #[cfg(target_os = "macos")]
+            Renderer::Metal(r) => r.render(frames, backdrop, stack),
+            #[cfg(any(not(target_os = "macos"), feature = "wgpu-effects"))]
+            Renderer::Portable(r) => r.render(frames, backdrop, stack),
+        }
+    }
+}
 
 /// The pictures to draw through a stack.
 pub struct Job {
@@ -54,11 +106,9 @@ impl Worker {
         std::thread::Builder::new()
             .name("effects".into())
             .spawn(move || {
-                #[cfg(target_os = "macos")]
-                let mut renderer = metal::Renderer::new();
-                #[cfg(target_os = "macos")]
+                let mut renderer = Renderer::new();
                 if renderer.is_none() {
-                    eprintln!("no Metal device: effects and filters won't show");
+                    eprintln!("no GPU device: effects, filters and layers won't show");
                 }
                 loop {
                     let job = {
@@ -71,20 +121,10 @@ impl Worker {
                             slot = ready.wait(slot).unwrap();
                         }
                     };
-                    #[cfg(target_os = "macos")]
                     let drawn = renderer.as_mut().map(|r| {
-                        fn image(f: &Arc<DecodedFrame>) -> metal::Image<'_> {
-                            metal::Image {
-                                width: f.width,
-                                height: f.height,
-                                bgra: &f.bgra,
-                            }
-                        }
-                        let frames: Vec<_> = job.frames.iter().map(image).collect();
-                        r.render(&frames, job.backdrop.as_ref().map(image), &job.stack)
+                        let frames: Vec<_> = job.frames.iter().map(|f| image(f)).collect();
+                        r.render(&frames, job.backdrop.as_deref().map(image), &job.stack)
                     });
-                    #[cfg(not(target_os = "macos"))]
-                    let drawn: Option<(u32, u32, Vec<u8>)> = None;
                     let Some((width, height, bgra)) = drawn.or_else(|| {
                         job.frames
                             .last()
