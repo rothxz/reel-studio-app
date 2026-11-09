@@ -55,6 +55,29 @@ pub struct Settings {
     pub bitrate: u64,
 }
 
+/// Whether a visible video clip shows a swapped face.
+fn face_swapped(project: &Project) -> bool {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .any(|c| !c.hidden && c.kind == "video" && c.active_face_swap().is_some())
+}
+
+/// Visible clips whose face swap is on but not processed (the export
+/// would show the original face): their ids.
+pub fn unprocessed_face_swaps(project: &Project) -> Vec<String> {
+    let results = crate::face_swap::cache::Results::default();
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .filter(|c| !c.hidden && c.kind == "video" && c.active_face_swap().is_some())
+        .filter(|c| results.for_clip(c).is_none())
+        .map(|c| c.id.clone())
+        .collect()
+}
+
 /// 24 and 60 stay, anything else is 30.
 pub fn snap_fps(fps: f64) -> u32 {
     match fps.round() as u32 {
@@ -244,6 +267,9 @@ fn write(
     if project.duration <= 0 {
         bail!("There's nothing on the timeline to export");
     }
+    if !unprocessed_face_swaps(&project).is_empty() {
+        bail!("Process the face swap before exporting");
+    }
     let mut engine = Engine::new();
     engine.load(&project).map_err(|e| anyhow!(e))?;
     let mut gpu = Renderer::new().context("Export needs a GPU, and none was found")?;
@@ -256,6 +282,7 @@ fn write(
             bitrate: settings.bitrate,
             input: PixelOrder::Bgra,
             audio: true,
+            comment: face_swapped(&project).then(|| crate::face_swap::MANIPULATED_NOTE.to_string()),
         },
     )?;
     eprintln!(
@@ -289,6 +316,8 @@ fn write(
         .map(|(k, v)| (k, Some(v)))
         .collect();
     let mut readers: HashMap<String, FrameReader> = HashMap::new();
+    // Face swaps: their processed results, pasted over the frames.
+    let face_swaps = crate::face_swap::cache::Results::default();
     let mut texts = RasterCache::default();
     let mut backdrops: HashMap<String, Option<Arc<DecodedFrame>>> = HashMap::new();
     let mut mix = TimelineMix::new(project.clone(), 0, AUDIO_RATE);
@@ -358,6 +387,14 @@ fn write(
                         .with_context(|| format!("Can't decode {}", layer.source))?
                     else {
                         continue;
+                    };
+                    let f = match face_swaps.for_clip(clip) {
+                        Some((r, opacity)) if layer.kind == LayerKind::Video => {
+                            crate::face_swap::job::composite(&f, &r, opacity)
+                                .map(Arc::new)
+                                .unwrap_or(f)
+                        }
+                        _ => f,
                     };
                     (f, 1.)
                 }
@@ -525,6 +562,7 @@ mod tests {
                 bitrate: 500_000,
                 input: PixelOrder::Bgra,
                 audio: true,
+                comment: Some("test".into()),
             },
         )
         .unwrap();

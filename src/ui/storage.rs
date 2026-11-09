@@ -50,8 +50,10 @@ impl SettingsPage {
 #[derive(Clone, Debug)]
 struct ModelFile {
     /// The speech-to-text model's language (English label), or None for
-    /// the natural voice's setup.
+    /// the natural voice's setup or the face swap models.
     language: Option<&'static str>,
+    /// The face swap models (their folder).
+    face: bool,
     path: PathBuf,
     bytes: u64,
 }
@@ -60,6 +62,7 @@ impl ModelFile {
     fn name(&self) -> String {
         match self.language {
             Some(l) => tf("Auto captions · {language}", &[("language", &t(l))]),
+            None if self.face => t("Face swap").to_string(),
             None => t("Natural voice").to_string(),
         }
     }
@@ -70,6 +73,7 @@ fn list_models() -> Vec<ModelFile> {
         .into_iter()
         .map(|(language, path)| ModelFile {
             language: Some(language),
+            face: false,
             bytes: storage::dir_bytes(&path),
             path,
         })
@@ -79,7 +83,18 @@ fn list_models() -> Vec<ModelFile> {
     if bytes > 0 {
         list.push(ModelFile {
             language: None,
+            face: false,
             path: voice,
+            bytes,
+        });
+    }
+    let face = crate::face_swap::models::dir();
+    let bytes = storage::dir_bytes(&face);
+    if bytes > 0 {
+        list.push(ModelFile {
+            language: None,
+            face: true,
+            path: face,
             bytes,
         });
     }
@@ -172,7 +187,11 @@ impl Editor {
 
     /// An export or an AI job may be reading cached files or models.
     fn storage_busy(&self) -> bool {
-        self.export.is_some() || self.caption_job.is_some() || self.agent.busy
+        self.export.is_some()
+            || self.caption_job.is_some()
+            || self.agent.busy
+            || !self.face_swap.jobs.is_empty()
+            || self.face_swap.download.is_some()
     }
 
     /// The body of a storage page.
@@ -611,6 +630,8 @@ impl Editor {
             task.await;
             this.update(cx, |ed, cx| {
                 ed.storage.clearing = false;
+                ed.face_swap.results.clear();
+                ed.face_swap_changed(cx);
                 ed.toast(tf("Cleared {size}", &[("size", &size)]), cx);
                 ed.measure_storage(cx);
             })
@@ -731,7 +752,7 @@ impl Editor {
                     .text_size(px(theme::MD))
                     .text_color(theme::text_secondary())
                     .child(t(
-                        "No models downloaded yet. Auto captions and the natural voice download one \
+                        "No models downloaded yet. Auto captions, face swap and the natural voice download one \
                          the first time you use them.",
                     ))
                     .into_any_element(),
@@ -842,7 +863,9 @@ impl Editor {
                 let models = models.clone();
                 let task = cx.background_executor().spawn(async move {
                     for m in &models {
-                        if m.language.is_none() {
+                        if m.face {
+                            crate::face_swap::pipeline::unload();
+                        } else if m.language.is_none() {
                             crate::agent::local_voice::stop();
                         }
                         storage::remove(&m.path);

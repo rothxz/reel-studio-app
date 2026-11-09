@@ -395,6 +395,9 @@ pub struct Editor {
     /// Auto captions running (`ui/captions.rs`): switching tabs doesn't
     /// stop it.
     pub(crate) caption_job: Option<crate::ui::captions::CaptionJob>,
+    /// Face swap (`ui/face_swap.rs`): model downloads, jobs, processed
+    /// results pasted over the player's frames.
+    pub(crate) face_swap: crate::ui::face_swap::FaceSwapUi,
     /// The inspector's Edit captions tab (Find & replace).
     pub(crate) caption_edit: crate::ui::caption_edit::CaptionEditUi,
     /// The effect grid's scroll (more rows load near the end).
@@ -608,6 +611,7 @@ impl Editor {
             focus_text_field: false,
             fx_hover: None,
             caption_job: None,
+            face_swap: Default::default(),
             caption_edit,
             fx_scroll: gpui::ScrollHandle::new(),
             inspector_entry: None,
@@ -2010,6 +2014,12 @@ impl Editor {
         self.wanted = wanted;
     }
 
+    /// Something the composed picture depends on changed outside the
+    /// frames and the look stack (a face swap): it's composed again.
+    pub(crate) fn bump_frame_seq(&mut self) {
+        self.frame_seq += 1;
+    }
+
     /// A picture made here (text, a sticker frame) as a layer's frame; a
     /// new one is composed on the next render.
     fn set_layer_frame(&mut self, key: &str, frame: Arc<DecodedFrame>) {
@@ -2200,6 +2210,13 @@ impl Editor {
         if frames.is_empty() {
             return;
         }
+        // Face swaps pasted over their clips' frames.
+        let layers: Vec<(String, String, LayerKind)> = self
+            .wanted
+            .iter()
+            .map(|w| (w.key.clone(), w.clip_id.clone(), w.kind))
+            .collect();
+        let frames = self.face_swap_frames(&layers, frames);
         let t = self.preview_time();
         let mut needs = Needs::default();
         let stack = {
@@ -2658,6 +2675,7 @@ impl Render for Editor {
             self.layers_panel = None;
         }
         self.load_stickers(cx);
+        self.load_face_swap_photo(cx);
         self.sync_audio();
         self.sync_text_field(window, cx);
         self.refresh_picture(cx);

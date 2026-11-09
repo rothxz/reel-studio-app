@@ -310,6 +310,21 @@ isn't listed.
     Animation · Adjust ✓. *Speed › Normal: log slider 0.1–100× snapping to
     1×, read-out, length before → after, reset; one undo step per drag;
     a constant speed drops any curve.*
+    - [x] Visual › Face Swap (`ui/face_swap.rs`, pipeline in
+      `src/face_swap/`; new here, the old editor has none): a face from
+      a photo on a chosen person, on this computer (ONNX Runtime; Core ML
+      / DirectML / CUDA, CPU fallback). Models downloaded once after a
+      licence prompt (pinned URLs + SHA-256; inswapper and ArcFace are
+      non-commercial), consent prompt per photo, Detect faces → person
+      tiles, Blend, Fast / High, restoration (GFPGAN, High), Process with
+      progress / cancel / errors. Non-destructive: `faceSwap` on the
+      clip, results in `<data>/cache/face-swap` pasted over decoded
+      frames by the player and export (export refuses unprocessed
+      swaps and tags the MP4 as AI-edited); timeline tag "AI FACE";
+      models and results in Settings → Data and Storage. *Not yet:
+      occlusion masks (a hand over the face is pasted over), a
+      commercially licensed swap model, showing frames while a job
+      runs, image clips, the agent tool, translations.*
     - [x] Speed › Curve (`ui/speed_curve.rs`, document side
       `speed_curve.rs`): None, Custom and six ramp tiles with their
       shapes; with one on, a card: name, length before → after, the
