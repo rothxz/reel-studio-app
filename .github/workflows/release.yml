@@ -373,7 +373,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential nasm pkg-config clang zlib1g-dev libbz2-dev \
+            build-essential nasm pkg-config clang zlib1g-dev \
             libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-xcb-dev libxcb1-dev libfontconfig-dev file rpm
 
@@ -432,10 +432,11 @@ jobs:
                  done
                  grep -q "^Exec=reel-studio" /usr/share/applications/reel-studio.desktop'
           sudo apt-get install -y --no-install-recommends ./dist/*.deb
-          sudo sh -c "$check"
+          sudo sh -ec "$check"
           sudo apt-get remove -y reel-studio
           docker run --rm -v "$PWD/dist:/dist:ro" fedora:41 \
-            sh -c "dnf install -y --setopt=install_weak_deps=False /dist/*.rpm && $check"
+            sh -ec "dnf install -y --setopt=install_weak_deps=False /dist/*.rpm
+                    $check"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

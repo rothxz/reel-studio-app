@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Builds the FFmpeg the released Linux app links: static libraries, LGPL
 # only (no GPL / nonfree parts), decoding plus export's encoders; much the
-# same configuration as packaging/macos/build-ffmpeg.sh. The AppImage then
-# needs no FFmpeg on the user's system (only zlib and bzip2, which every
-# distribution has).
+# same configuration as packaging/macos/build-ffmpeg.sh. The app then
+# needs no FFmpeg on the user's system, only zlib (libz.so.1 everywhere).
 #
 #   packaging/linux/build-ffmpeg.sh <prefix>
 #
 # Builds for this machine's architecture (x86_64 or aarch64). Needs a C
-# compiler, make, nasm (x86_64: FFmpeg's assembly) and the zlib / bzip2
-# headers: apt install build-essential nasm zlib1g-dev libbz2-dev.
+# compiler, make, nasm (x86_64: FFmpeg's assembly) and the zlib headers:
+# apt install build-essential nasm zlib1g-dev.
 # Then build the app with FFMPEG_DIR=<prefix> (build.rs links the static
 # libraries in order, with the system libraries they need).
 set -euo pipefail
@@ -53,7 +52,9 @@ flags=(
   # VA-API…): only what is listed here.
   --disable-autodetect
   --enable-zlib
-  --enable-bzlib
+  # No bzip2 (only Matroska's rare bzip2-compressed tracks use it): the
+  # library is libbz2.so.1.0 on Debian / Ubuntu but libbz2.so.1 on Fedora
+  # and openSUSE, so a binary built here that links it won't start there.
   --enable-pthreads
 )
 if ! command -v nasm > /dev/null; then
