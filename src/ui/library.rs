@@ -185,6 +185,8 @@ impl Editor {
         match (tab, view) {
             (EFFECTS_TAB, 0) => labels(crate::catalog::EFFECT_TABS),
             (FILTER_TAB, 0) => labels(crate::catalog::FILTER_TABS),
+            (crate::ui::browser::TRANSITIONS_TAB, 0) => labels(crate::transitions::CATEGORIES),
+            (crate::ui::browser::CAPTIONS_TAB, 1) => labels(crate::caption_styles::TABS),
             (AUDIO_TAB, 0) => MUSIC_MOODS
                 .iter()
                 .map(|(l, _)| SharedString::from(*l))

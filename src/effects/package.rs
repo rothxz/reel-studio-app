@@ -98,6 +98,11 @@ pub fn parse_filter(text: &str) -> Result<String> {
     body(&object(text)?)
 }
 
+/// A transition's reveal package: like a filter's, only a body.
+pub fn parse_reveal(text: &str) -> Result<String> {
+    body(&object(text)?)
+}
+
 /// Downloads (or reads the cached copy of) `key` and checks it is exactly
 /// the package the key names. Blocking: run it off the UI thread.
 pub fn fetch_text(key: &str) -> Result<String> {
@@ -123,6 +128,7 @@ pub enum Lookup<T> {
 pub struct Packages {
     effects: HashMap<String, Arc<EffectPackage>>,
     filters: HashMap<String, Arc<str>>,
+    reveals: HashMap<String, Arc<str>>,
     pending: HashSet<String>,
     failed: HashSet<String>,
 }
@@ -131,6 +137,15 @@ pub struct Packages {
 pub enum Fetched {
     Effect(String, Result<EffectPackage>),
     Filter(String, Result<String>),
+    Reveal(String, Result<String>),
+}
+
+/// Which kind of package a key holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageKind {
+    Effect,
+    Filter,
+    Reveal,
 }
 
 impl Packages {
@@ -144,6 +159,14 @@ impl Packages {
 
     pub fn filter(&self, key: &str) -> Lookup<Arc<str>> {
         match self.filters.get(key) {
+            Some(p) => Lookup::Ready(p.clone()),
+            None if self.failed.contains(key) => Lookup::Failed,
+            None => Lookup::Missing,
+        }
+    }
+
+    pub fn reveal(&self, key: &str) -> Lookup<Arc<str>> {
+        match self.reveals.get(key) {
             Some(p) => Lookup::Ready(p.clone()),
             None if self.failed.contains(key) => Lookup::Failed,
             None => Lookup::Missing,
@@ -165,7 +188,13 @@ impl Packages {
                 self.filters.insert(key.clone(), body.into());
                 (key, None)
             }
-            Fetched::Effect(key, Err(e)) | Fetched::Filter(key, Err(e)) => (key, Some(e)),
+            Fetched::Reveal(key, Ok(body)) => {
+                self.reveals.insert(key.clone(), body.into());
+                (key, None)
+            }
+            Fetched::Effect(key, Err(e))
+            | Fetched::Filter(key, Err(e))
+            | Fetched::Reveal(key, Err(e)) => (key, Some(e)),
         };
         self.pending.remove(&key);
         if let Some(e) = error {
@@ -181,12 +210,12 @@ impl Packages {
 }
 
 /// Fetches one package (blocking).
-pub fn fetch(key: String, filter: bool) -> Fetched {
+pub fn fetch(key: String, kind: PackageKind) -> Fetched {
     let text = fetch_text(&key);
-    if filter {
-        Fetched::Filter(key, text.and_then(|t| parse_filter(&t)))
-    } else {
-        Fetched::Effect(key, text.and_then(|t| parse_effect(&t)))
+    match kind {
+        PackageKind::Filter => Fetched::Filter(key, text.and_then(|t| parse_filter(&t))),
+        PackageKind::Reveal => Fetched::Reveal(key, text.and_then(|t| parse_reveal(&t))),
+        PackageKind::Effect => Fetched::Effect(key, text.and_then(|t| parse_effect(&t))),
     }
 }
 

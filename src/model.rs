@@ -671,6 +671,23 @@ impl Project {
             let mut left = clip.clone();
             let mut right = clip.clone();
             let offset = at - clip.timeline_start;
+            // A caption's words split with it: each half keeps what is
+            // said in its time (cut between words), so neither repeats
+            // the other. Too short a half, or no word to cut at: no split.
+            if clip.is_caption() {
+                let share = offset as f64 / clip.timeline_duration.max(1) as f64;
+                let text = clip.text.as_deref().unwrap_or("");
+                let Some((a, b)) = crate::captions::split_text_at_share(text, share) else {
+                    return false;
+                };
+                if offset < crate::captions::MIN_SPLIT
+                    || clip.timeline_duration - offset < crate::captions::MIN_SPLIT
+                {
+                    return false;
+                }
+                left.text = Some(a);
+                right.text = Some(b);
+            }
             left.timeline_duration = offset;
             right.id = new_id("clip");
             right.timeline_start = at;

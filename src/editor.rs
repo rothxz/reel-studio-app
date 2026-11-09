@@ -319,6 +319,10 @@ pub struct Editor {
     pub(crate) shortcuts_open: bool,
     /// Settings, and the app updater it shows.
     pub(crate) settings_open: bool,
+    /// Settings pages open past the first (Data and Storage…), last on top.
+    pub(crate) settings_pages: Vec<crate::ui::storage::SettingsPage>,
+    /// What Settings → Data and Storage measured.
+    pub(crate) storage: crate::ui::storage::StorageView,
     pub(crate) updater: gpui::Entity<crate::updater::Updater>,
     /// The update dialog, opened from the menu's Check for Updates… (it
     /// also opens by itself when a check finds a new version).
@@ -388,6 +392,11 @@ pub struct Editor {
     pub(crate) focus_text_field: bool,
     /// The effect / filter tile under the pointer (its animation plays).
     pub(crate) fx_hover: Option<String>,
+    /// Auto captions running (`ui/captions.rs`): switching tabs doesn't
+    /// stop it.
+    pub(crate) caption_job: Option<crate::ui::captions::CaptionJob>,
+    /// The inspector's Edit captions tab (Find & replace).
+    pub(crate) caption_edit: crate::ui::caption_edit::CaptionEditUi,
     /// The effect grid's scroll (more rows load near the end).
     pub(crate) fx_scroll: gpui::ScrollHandle,
     /// The inspector's open sub-tab (entry key) for the selected clip.
@@ -522,6 +531,7 @@ impl Editor {
             ed.on_text_field(ev, cx)
         })
         .detach();
+        let caption_edit = crate::ui::caption_edit::CaptionEditUi::new(cx);
         let updater = crate::updater::Updater::new(cx);
         cx.observe(&updater, |_, _, cx| cx.notify()).detach();
         let project = Project::empty();
@@ -558,6 +568,8 @@ impl Editor {
             fullscreen: false,
             shortcuts_open: false,
             settings_open: false,
+            settings_pages: vec![],
+            storage: Default::default(),
             updater,
             update_dialog_open: false,
             update_hidden: None,
@@ -595,6 +607,8 @@ impl Editor {
             text_field_clip: None,
             focus_text_field: false,
             fx_hover: None,
+            caption_job: None,
+            caption_edit,
             fx_scroll: gpui::ScrollHandle::new(),
             inspector_entry: None,
             layers_panel: None,
@@ -1321,8 +1335,12 @@ impl Editor {
         }
         if self.settings_open {
             if id == Shortcut::Deselect {
-                self.settings_open = false;
-                cx.notify();
+                if self.settings_pages.is_empty() {
+                    self.settings_open = false;
+                    cx.notify();
+                } else {
+                    self.settings_back(cx);
+                }
             }
             return;
         }
@@ -1498,6 +1516,13 @@ impl Editor {
         };
         if self.edit("Split Clip", false, None, |p| p.split_at(&id, now), cx) {
             self.toast("Split at playhead", cx);
+        } else if self
+            .project
+            .find_clip(&id)
+            .is_some_and(|(_, c)| c.is_caption())
+        {
+            // A caption splits between words, never into a sliver.
+            self.toast("Can't split here — put the cursor between two words", cx);
         }
     }
 
@@ -2215,13 +2240,10 @@ impl Editor {
                 &mut needs,
             )
         };
+        for (key, kind) in needs.packages() {
+            self.fetch_package(key, kind, cx);
+        }
         self.load_named_effects(needs.rows, cx);
-        for key in needs.effect_packages {
-            self.fetch_package(key, false, cx);
-        }
-        for key in needs.filter_packages {
-            self.fetch_package(key, true, cx);
-        }
         let backdrop = match stack.canvas.as_ref().and_then(|c| c.backdrop.as_ref()) {
             Some(fx_stack::Backdrop::Image(path)) => self.backdrop_image(path, cx),
             _ => None,
@@ -2293,13 +2315,18 @@ impl Editor {
     }
 
     /// Downloads a package unless it's here or on its way.
-    fn fetch_package(&mut self, key: String, filter: bool, cx: &mut Context<Self>) {
+    fn fetch_package(
+        &mut self,
+        key: String,
+        kind: fx_package::PackageKind,
+        cx: &mut Context<Self>,
+    ) {
         if !self.packages.begin(&key) {
             return;
         }
         let task = cx
             .background_executor()
-            .spawn(async move { fx_package::fetch(key, filter) });
+            .spawn(async move { fx_package::fetch(key, kind) });
         cx.spawn(async move |this, cx| {
             let fetched: Fetched = task.await;
             this.update(cx, |ed, cx| {

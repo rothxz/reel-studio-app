@@ -48,6 +48,12 @@ fn proxy_get(api: &str, path: &str, params: &[(&str, String)]) -> Result<Value> 
         .with_context(|| format!("media proxy {api}/{path}"))?
         .body_mut()
         .read_to_string()?;
+    let kind = if api == "klipy" {
+        crate::data_usage::Kind::Stickers
+    } else {
+        crate::data_usage::Kind::Music
+    };
+    crate::data_usage::record(kind, body.len() as u64);
     Ok(serde_json::from_str(&body)?)
 }
 
@@ -313,6 +319,7 @@ pub fn download_track(track: &MusicTrack) -> Result<PathBuf> {
         .with_config()
         .limit(200 << 20)
         .read_to_vec()?;
+    crate::data_usage::record(crate::data_usage::Kind::Music, bytes.len() as u64);
     let tmp = path.with_extension("part");
     std::fs::write(&tmp, &bytes)?;
     std::fs::rename(&tmp, &path)?;

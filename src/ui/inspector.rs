@@ -111,6 +111,27 @@ const TEXT_TABS: &[Tab] = &[
     },
     VISUAL_BASIC,
 ];
+// A caption's look is edited on Text; its styles are picked in the
+// browser (Captions › Style), so they aren't repeated here.
+const CAPTION_TABS: &[Tab] = &[
+    Tab {
+        label: "Text",
+        entries: &[
+            e("text:basic", "Basic"),
+            e("text:fonts", "Fonts"),
+            e("text:effects", "Effects"),
+            e("text:bubbles", "Bubbles"),
+        ],
+    },
+    Tab {
+        label: "Edit captions",
+        entries: &[e("captionEdit", "Edit captions")],
+    },
+    Tab {
+        label: "Animation",
+        entries: &[e("text:animations", "Animations")],
+    },
+];
 const AUDIO_TABS: &[Tab] = &[Tab {
     label: "Audio",
     entries: &[
@@ -271,7 +292,12 @@ impl Editor {
         overlay: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let tabs: Vec<(&Tab, Vec<&Entry>)> = tabs_for(&clip.kind)
+        let table = if clip.is_caption() {
+            CAPTION_TABS
+        } else {
+            tabs_for(&clip.kind)
+        };
+        let tabs: Vec<(&Tab, Vec<&Entry>)> = table
             .iter()
             .map(|t| {
                 (
@@ -367,6 +393,7 @@ impl Editor {
             Some("effects") => self.render_effect_settings(cx),
             Some("volume") => self.render_volume_panel(clip, cx),
             Some("text:basic") => self.render_text_panel(clip, cx),
+            Some("captionEdit") => self.render_caption_edit(clip, cx),
             Some(key) => {
                 let label = tabs
                     .iter()

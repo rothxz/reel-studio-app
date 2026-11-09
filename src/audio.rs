@@ -383,6 +383,26 @@ impl Stream {
     }
 }
 
+/// The sound of `path` from `from` to `to` (source time) as mono f32 at
+/// `rate` (speech recognition's input).
+pub fn read_mono(path: &str, from: Micros, to: Micros, rate: u32) -> Result<Vec<f32>> {
+    let mut s = Stream::open(path)?;
+    s.seek(from);
+    let n = ((to - from).max(0) as f64 * rate as f64 / SECOND as f64) as usize;
+    let step = s.rate as f64 / rate as f64;
+    let mut out = Vec::with_capacity(n);
+    let mut chunk = vec![[0f32; 2]; 4096];
+    while out.len() < n {
+        let take = (n - out.len()).min(chunk.len());
+        s.read(&mut chunk[..take], step);
+        out.extend(chunk[..take].iter().map(|[l, r]| (l + r) * 0.5));
+        if s.ended() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// A decoded frame as stereo f32 (mono doubled, more channels: the first
 /// two).
 fn to_stereo(frame: &ff::frame::Audio) -> Vec<[f32; 2]> {

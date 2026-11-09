@@ -33,6 +33,8 @@ pub enum Program<'a> {
     Filter(&'a str),
     /// A video effect's body.
     Effect(EffectKind, &'a str),
+    /// A transition's reveal of the incoming picture.
+    Reveal(&'a str),
 }
 
 /// The operations the composition needs from a GPU.
@@ -122,6 +124,13 @@ fn uniforms(pass: &Pass, ar: f32) -> Uniforms {
             u.dur = inputs.duration;
             u.p = inputs.p;
         }
+        Pass::Reveal {
+            progress, duration, ..
+        } => {
+            u.time = progress * duration;
+            u.pr = *progress;
+            u.dur = *duration;
+        }
     }
     u
 }
@@ -131,6 +140,7 @@ fn pass_program(pass: &Pass) -> Program<'_> {
         Pass::Matrix(_) => Program::Matrix,
         Pass::Filter { body, .. } => Program::Filter(body),
         Pass::Effect { package, .. } => Program::Effect(package.kind, &package.body),
+        Pass::Reveal { body, .. } => Program::Reveal(body),
     }
 }
 
@@ -359,6 +369,10 @@ fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> 
         Some([nw, nh]) => (nw * cw * p.scale, nh * ch * p.scale),
         None => (fw * size, fh * size),
     };
+    // A transition's motion: moved by its own drawn size, stretched.
+    let [tx, ty, sx, sy] = p.motion;
+    let (cx, cy) = (cw / 2. + p.x * cw + tx * sw, ch / 2. + p.y * ch + ty * sh);
+    let (sw, sh) = (sw * sx.max(1e-4), sh * sy.max(1e-4));
     let rad = p.rotation.to_radians();
     let mut flags = 0u32;
     if p.flip_x {
@@ -383,7 +397,7 @@ fn compose_uniforms(p: &Placement, (w, h): (u32, u32), (cw, ch): (u32, u32)) -> 
     };
     [
         [cw, ch, fw / fh, p.blend as f32],
-        [cw / 2. + p.x * cw, ch / 2. + p.y * ch, sw, sh],
+        [cx, cy, sw, sh],
         [rad.cos(), rad.sin(), p.opacity, flags as f32],
         p.crop,
         mask0,
@@ -732,6 +746,22 @@ pub mod checks {
             count += 1;
             if r.program(Program::Effect(pkg.kind, &pkg.body)).is_none() {
                 failed.push(format!("effect {}", row.name));
+            }
+        }
+        // The transitions' reveals.
+        for p in crate::transitions::PRESETS.iter() {
+            let crate::transitions::Motion::Reveal(shader) = &p.motion else {
+                continue;
+            };
+            let key = crate::transitions::reveal_package_key(shader).expect("a package key");
+            let Ok(text) = fetch_text(key) else {
+                failed.push(format!("transition {} (fetch)", p.id));
+                continue;
+            };
+            let body = crate::effects::package::parse_reveal(&text).unwrap();
+            count += 1;
+            if r.program(Program::Reveal(&body)).is_none() {
+                failed.push(format!("transition {}", p.id));
             }
         }
         eprintln!("{count} packages compiled");

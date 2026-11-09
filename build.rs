@@ -116,6 +116,30 @@ fn app_inputs() {
     std::fs::write(out.join("filter_previews.json"), previews).unwrap();
     std::fs::write(out.join("filter_packages.json"), packages).unwrap();
 
+    // The shader-built reveals that double as transitions (src/transitions.rs):
+    // their list (id, label, categories, length), each one's package key
+    // (the package manifest's `animations` section, read there) and tile
+    // animation (the preview manifest).
+    let reveals = app
+        .as_ref()
+        .map(|a| a.join("src/features/preview/animationShaders.generated.ts"))
+        .and_then(|f| watched_read(&f))
+        .and_then(|ts| ts_rows(&ts))
+        .unwrap_or_else(|| "[]".into());
+    let manifest = data
+        .as_ref()
+        .map(|d| d.join("effectPackageManifest.json"))
+        .and_then(|f| watched_read(&f))
+        .unwrap_or_else(|| "{}".into());
+    let reveal_previews = data
+        .as_ref()
+        .map(|d| d.join("clipAnimationPreviewManifest.json"))
+        .and_then(|f| watched_read(&f))
+        .unwrap_or_else(|| "{}".into());
+    std::fs::write(out.join("reveals.json"), reveals).unwrap();
+    std::fs::write(out.join("package_manifest.json"), manifest).unwrap();
+    std::fs::write(out.join("reveal_previews.json"), reveal_previews).unwrap();
+
     // The UI dictionaries (src/i18n.rs): every language's strings as one
     // JSON object, `{ "km": { "settings.title": "…", … }, … }` ("{}"
     // without a checkout: the app is then English only).
@@ -484,6 +508,41 @@ fn dotenv_value(text: &str, key: &str) -> Option<String> {
 
 /// The first `[ … ]` literal of a generated TS file: JSON rows, maybe with
 /// a trailing comma after the last (which JSON doesn't allow).
+/// A generated TS array of flat object literals (`  key: value,` one per
+/// line, unquoted keys, trailing commas) as JSON.
+fn ts_rows(ts: &str) -> Option<String> {
+    let start = ts.find("= [")? + 2;
+    let end = ts[start..].find("\n];")? + start;
+    let mut out = String::from("[");
+    for line in ts[start + 1..end].lines() {
+        let t = line.trim();
+        let quoted = match t.split_once(": ") {
+            Some((k, v))
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
+                format!("\"{k}\": {v}")
+            }
+            _ => t.to_string(),
+        };
+        out.push_str(&quoted);
+        out.push('\n');
+    }
+    out.push(']');
+    // Trailing commas before a closing brace / bracket.
+    let mut json = String::with_capacity(out.len());
+    let chars: Vec<char> = out.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c == ',' {
+            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
+            if matches!(next, Some('}') | Some(']')) {
+                continue;
+            }
+        }
+        json.push(c);
+    }
+    Some(json)
+}
+
 fn json_array(ts: &str) -> Option<String> {
     let start = ts.find("= [")? + 2;
     let end = ts[start..].find("\n];")? + start;

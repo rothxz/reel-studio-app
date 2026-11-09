@@ -185,10 +185,9 @@ struct Looks {
 impl Looks {
     /// Fetches what a stack found missing; false when nothing new came of
     /// it (drawn without).
-    fn fetch(&mut self, needs: Needs) -> bool {
+    fn fetch(&mut self, mut needs: Needs) -> bool {
         let mut any = false;
-        let rows: Vec<String> = needs
-            .rows
+        let rows: Vec<String> = std::mem::take(&mut needs.rows)
             .into_iter()
             .filter(|r| self.asked.insert(r.clone()))
             .collect();
@@ -203,15 +202,10 @@ impl Looks {
                 Err(e) => eprintln!("export: effect rows: {e:#}"),
             }
         }
-        for (key, filter) in needs
-            .effect_packages
-            .into_iter()
-            .map(|k| (k, false))
-            .chain(needs.filter_packages.into_iter().map(|k| (k, true)))
-        {
+        for (key, kind) in needs.packages() {
             if self.packages.begin(&key) {
                 any = true;
-                let fetched = fx_package::fetch(key, filter);
+                let fetched = fx_package::fetch(key, kind);
                 self.packages.end(fetched);
             }
         }
@@ -395,9 +389,7 @@ fn write(
                 live: None,
             };
             let stack = fx_stack::build(&project, &placed, t, out_px, &src, &mut needs);
-            let missing = !needs.rows.is_empty()
-                || !needs.effect_packages.is_empty()
-                || !needs.filter_packages.is_empty();
+            let missing = needs.any();
             if !missing || !looks.fetch(needs) {
                 break stack;
             }

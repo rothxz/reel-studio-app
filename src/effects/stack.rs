@@ -48,6 +48,13 @@ pub enum Pass {
         package: Arc<EffectPackage>,
         inputs: EffectInputs,
     },
+    /// A transition's reveal of the incoming picture (`progress` 0–1
+    /// through its window of `duration` seconds), after its looks.
+    Reveal {
+        body: Arc<str>,
+        progress: f32,
+        duration: f32,
+    },
 }
 
 /// A clip's shape mask, as the compose pass reads it (see
@@ -87,6 +94,9 @@ pub struct Placement {
     /// The picture's own size on the canvas at scale 1 (canvas widths,
     /// heights) instead of contain-fitting it: text and stickers.
     pub natural: Option<[f32; 2]>,
+    /// A transition's motion on top: moved by tx, ty of its own drawn
+    /// size, its width and height times sx, sy.
+    pub motion: [f32; 4],
 }
 
 impl Default for Placement {
@@ -104,6 +114,7 @@ impl Default for Placement {
             mask: None,
             blend: 0,
             natural: None,
+            motion: [0., 0., 1., 1.],
         }
     }
 }
@@ -166,6 +177,7 @@ pub fn place(clip: &Clip, get: impl Fn(&str, f64) -> f32) -> Placement {
         mask,
         blend,
         natural: None,
+        motion: [0., 0., 1., 1.],
     }
 }
 
@@ -268,6 +280,39 @@ pub struct Needs {
     pub rows: Vec<String>,
     pub effect_packages: Vec<String>,
     pub filter_packages: Vec<String>,
+    pub reveal_packages: Vec<String>,
+}
+
+impl Needs {
+    /// Something's missing (rows or packages).
+    pub fn any(&self) -> bool {
+        !self.rows.is_empty()
+            || !self.effect_packages.is_empty()
+            || !self.filter_packages.is_empty()
+            || !self.reveal_packages.is_empty()
+    }
+
+    /// The packages to fetch, with their kind.
+    pub fn packages(&mut self) -> Vec<(String, super::package::PackageKind)> {
+        use super::package::PackageKind;
+        let mut out = vec![];
+        out.extend(
+            self.effect_packages
+                .drain(..)
+                .map(|k| (k, PackageKind::Effect)),
+        );
+        out.extend(
+            self.filter_packages
+                .drain(..)
+                .map(|k| (k, PackageKind::Filter)),
+        );
+        out.extend(
+            self.reveal_packages
+                .drain(..)
+                .map(|k| (k, PackageKind::Reveal)),
+        );
+        out
+    }
 }
 
 /// Where the builder looks things up.
@@ -373,6 +418,29 @@ fn filter_pass(clip: &Clip, src: &Sources, needs: &mut Needs) -> Option<Pass> {
     }
 }
 
+/// A transition's reveal as a pass, once its package is here.
+fn reveal_pass(
+    shader: &str,
+    progress: f32,
+    duration: f32,
+    src: &Sources,
+    needs: &mut Needs,
+) -> Option<Pass> {
+    let key = crate::transitions::reveal_package_key(shader)?;
+    match src.packages.reveal(key) {
+        Lookup::Ready(body) => Some(Pass::Reveal {
+            body,
+            progress: progress.clamp(0., 1.),
+            duration,
+        }),
+        Lookup::Missing => {
+            needs.reveal_packages.push(key.to_string());
+            None
+        }
+        Lookup::Failed => None,
+    }
+}
+
 fn is_distortion(p: &Pass) -> bool {
     matches!(p, Pass::Effect { package, .. } if package.kind == EffectKind::Distortion)
 }
@@ -416,10 +484,16 @@ pub fn build(
             passes.extend(adjust);
         }
         passes.extend(after);
-        stack.layers.push(LayerPlan {
-            passes,
-            place: place.clone(),
-        });
+        // Inside a transition's window: its motion, or its reveal (over
+        // everything the clip's looks drew).
+        let mut place = place.clone();
+        if let Some(m) = crate::transitions::motion_at(project, clip, t) {
+            m.pose.apply(&mut place);
+            if let Some((shader, progress, duration)) = m.reveal {
+                passes.extend(reveal_pass(&shader, progress, duration, src, needs));
+            }
+        }
+        stack.layers.push(LayerPlan { passes, place });
     }
 
     let mut lanes: Vec<_> = project

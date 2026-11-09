@@ -350,7 +350,18 @@ pub fn picture_layers(project: &Project, mut active: Vec<ActiveLayer>) -> Vec<Ac
                 .unwrap_or(t.order)
         })
     };
-    active.sort_by(|a, b| order(&a.clip_id).total_cmp(&order(&b.clip_id)));
+    // One lane's clips by time: through a transition the incoming clip
+    // is drawn over the outgoing one.
+    let start = |clip_id: &str| {
+        project
+            .find_clip(clip_id)
+            .map_or(0, |(_, c)| c.timeline_start)
+    };
+    active.sort_by(|a, b| {
+        order(&a.clip_id)
+            .total_cmp(&order(&b.clip_id))
+            .then_with(|| start(&a.clip_id).cmp(&start(&b.clip_id)))
+    });
     active.retain(|l| match l.kind {
         LayerKind::Video | LayerKind::Image | LayerKind::Sticker => {
             (l.is_visual || l.kind == LayerKind::Sticker) && !l.source.is_empty()

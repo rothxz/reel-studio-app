@@ -786,11 +786,18 @@ impl Editor {
                         if has { Icon::Transition } else { Icon::Shuffle }.el(12., rgb(0x141416)),
                     )
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    // Transitions live in the browser's Transitions tab.
-                    .on_click(cx.listener(|ed, _, _, cx| {
-                        ed.browser_tab = 5;
-                        cx.notify();
-                    }))
+                    // Transitions live in the browser's Transitions tab,
+                    // which follows the cut nearest the playhead.
+                    .on_click({
+                        let cut = clip.end() - clip.out_transition() / 2;
+                        cx.listener(move |ed, _, _, cx| {
+                            ed.pause();
+                            ed.seek(cut, cx);
+                            ed.browser_tab = crate::ui::browser::TRANSITIONS_TAB;
+                            ed.browser_views[crate::ui::browser::TRANSITIONS_TAB] = 0;
+                            cx.notify();
+                        })
+                    })
                     .into_any_element()
             })
             .collect();
