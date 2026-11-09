@@ -22,6 +22,7 @@ mod gizmo;
 mod history;
 mod i18n;
 mod library;
+mod links;
 mod model;
 mod pinch;
 mod prefs;

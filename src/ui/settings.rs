@@ -166,8 +166,60 @@ impl Editor {
             group("UPDATES", vec![self.update_row(cx)]).into_any_element(),
             group("PRIVACY", vec![self.usage_data_row(cx)]).into_any_element(),
             group(
+                "HELP",
+                vec![link_row(
+                    "settings-bug",
+                    Icon::Bug,
+                    None,
+                    t("Report a bug"),
+                    None,
+                    crate::links::bug_report_url(),
+                )],
+            )
+            .into_any_element(),
+            group_with(
+                Some("FOLLOW US"),
+                [crate::links::INSTAGRAM, crate::links::FACEBOOK]
+                    .into_iter()
+                    .map(|(name, handle, url)| {
+                        let (icon, color) = if name == "Instagram" {
+                            (Icon::LogoInstagram, gpui::rgb(0xe1306c))
+                        } else {
+                            (Icon::LogoFacebook, gpui::rgb(0x1877f2))
+                        };
+                        link_row(name, icon, Some(color), name, Some(handle), url.to_string())
+                    })
+                    .collect(),
+                Some("Tips, templates and new features, first."),
+            )
+            .into_any_element(),
+            group(
                 "ABOUT",
                 vec![
+                    link_row(
+                        "settings-privacy",
+                        Icon::ShieldCheckmark,
+                        None,
+                        t("Privacy Policy"),
+                        None,
+                        crate::links::PRIVACY_URL.into(),
+                    ),
+                    link_row(
+                        "settings-terms",
+                        Icon::DocumentText,
+                        None,
+                        t("Terms of Use"),
+                        None,
+                        crate::links::TERMS_URL.into(),
+                    ),
+                    link_row(
+                        "settings-delete-data",
+                        Icon::TrashSolid,
+                        None,
+                        t("Data deletion"),
+                        None,
+                        crate::links::DELETE_DATA_URL.into(),
+                    ),
                     row(Icon::InformationCircle, "Version", None)
                         .child(
                             div()
@@ -397,6 +449,48 @@ pub(crate) fn group_with(
                     .child(t(footer)),
             )
         })
+}
+
+/// A row that opens a web page (or a mail draft) outside the app: icon
+/// (in its brand colour, if any), label, a value, a chevron.
+fn link_row(
+    id: &'static str,
+    icon: Icon,
+    color: Option<gpui::Rgba>,
+    label: &'static str,
+    value: Option<&'static str>,
+    url: String,
+) -> AnyElement {
+    div()
+        .id(id)
+        .min_h(px(48.))
+        .px(px(16.))
+        .py(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::fill_subtle()))
+        .child(icon.el(17., color.unwrap_or(theme::text_secondary())))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(theme::MD))
+                .child(label),
+        )
+        .when_some(value, |d, v| {
+            d.child(
+                div()
+                    .text_size(px(theme::MD))
+                    .text_color(theme::text_secondary())
+                    .truncate()
+                    .child(v),
+            )
+        })
+        .child(Icon::ChevronForward.el(14., theme::text_tertiary()))
+        .on_click(move |_, _, cx| cx.open_url(&url))
+        .into_any_element()
 }
 
 /// A settings row: icon, label (and a line under it), then what follows.

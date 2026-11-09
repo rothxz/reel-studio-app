@@ -35,8 +35,12 @@ isn't listed.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
 - [~] Settings dialog: General (Language, Data and Storage), Updates,
-  Privacy (share anonymous usage data) and About (version). *No
-  appearance yet.*
+  Privacy (share anonymous usage data), Help (Report a bug: a mail
+  draft with app version, OS and language), Follow us (Instagram,
+  Facebook) and About (Privacy Policy, Terms of Use, Data deletion,
+  version), the links opened in the browser (src/links.rs). *No
+  appearance yet; no replay-onboarding or tips rows (the desktop has
+  neither).*
 - [x] Data and Storage (Settings pages with a back arrow): Storage Usage
   (donut, cache categories ticked over one Clear button, refused while an
   export / captions / agent job runs; the user's own data; Auto-remove

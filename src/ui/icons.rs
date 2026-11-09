@@ -118,6 +118,13 @@ icons! {
     ImagesSolid => (ION, 0xf391),
     FolderOpenSolid => (ION, 0xf326),
     HappySolid => (ION, 0xf361),
+    // Settings → Help, Follow us, About.
+    ShieldCheckmark => (ION, 0xf578),
+    DocumentText => (ION, 0xf2b3),
+    TrashSolid => (ION, 0xf5f2),
+    LogoInstagram => (ION, 0xf3f9),
+    LogoFacebook => (ION, 0xf3ed),
+    Bug => (ION, 0xf1ba),
     Keyboard => (MDI, 0xf097b),
     Undo => (MDI, 0xf17b3),
     Redo => (MDI, 0xf17b7),
