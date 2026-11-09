@@ -141,11 +141,7 @@ pub fn process(
         media: job.media.clone(),
         ref_width: ref_w,
         ref_height: ref_h,
-        crop_size: if cfg.restore {
-            super::restorer::SIZE
-        } else {
-            super::swapper::INSWAPPER_SIZE
-        },
+        crop_size: proc.crop_size(),
         mask_pad: proc.mask().pad,
         mask_blur: proc.mask().blur,
         frame_duration,

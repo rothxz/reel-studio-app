@@ -19,10 +19,20 @@ pub struct MaskShape {
 }
 
 impl MaskShape {
-    /// The swapper's crop: the whole crop, feathered over 30 %.
+    /// The swapper's crop, feathered over 30 %: solid only on the middle
+    /// of the face. The colour match reads its edge; a restored head crop
+    /// (which reaches past the face) is pasted through it.
     pub const SWAP: MaskShape = MaskShape {
         pad: [0.; 4],
         blur: 0.3,
+    };
+
+    /// The swapped face pasted back: feathered over 16 %, so the cheeks,
+    /// jaw and chin are the swapped face's too (with the wider feather they
+    /// stayed the target's, and the face read as theirs).
+    pub const FACE: MaskShape = MaskShape {
+        pad: [0.; 4],
+        blur: 0.16,
     };
 
     /// 0–1 at crop point `q` (pixels) of a `size` px crop.

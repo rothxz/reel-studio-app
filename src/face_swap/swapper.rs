@@ -107,9 +107,87 @@ impl FaceSwapper for Inswapper {
     }
 }
 
+/// The swap of a crop `k`× the swapper's size: the crop is split into k²
+/// interleaved tiles (tile (i, j) holds the crop's pixels (k·x + i,
+/// k·y + j)), each a whole face at the swapper's size; each is swapped and
+/// woven back. The model only works at its own size, so this is how it
+/// gives detail past it (sharper eyes, brows, moustache): k² swaps a frame.
+pub fn swap_boosted(
+    s: &mut dyn FaceSwapper,
+    target: &RgbImage,
+    source: &SourceLatent,
+    k: u32,
+) -> Result<RgbImage> {
+    if k <= 1 {
+        return s.swap(target, source);
+    }
+    let n = s.crop_size();
+    if target.width() != n * k || target.height() != n * k {
+        return Err(FaceSwapError::ModelShape(format!(
+            "boosted crop {}×{} isn't {k} × {n}",
+            target.width(),
+            target.height()
+        )));
+    }
+    let mut out = RgbImage::new(n * k, n * k);
+    let mut tile = RgbImage::new(n, n);
+    for i in 0..k {
+        for j in 0..k {
+            for (x, y, p) in tile.enumerate_pixels_mut() {
+                *p = *target.get_pixel(x * k + i, y * k + j);
+            }
+            let swapped = s.swap(&tile, source)?;
+            for (x, y, p) in swapped.enumerate_pixels() {
+                out.put_pixel(x * k + i, y * k + j, *p);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Inverts its crop; counts its calls.
+    struct Invert(usize);
+
+    impl FaceSwapper for Invert {
+        fn crop_size(&self) -> u32 {
+            4
+        }
+        fn template(&self) -> [Point; 5] {
+            [[0.; 2]; 5]
+        }
+        fn source_latent(&self, _: &Embedding) -> SourceLatent {
+            SourceLatent(vec![])
+        }
+        fn swap(&mut self, target: &RgbImage, _: &SourceLatent) -> Result<RgbImage> {
+            assert_eq!(target.width(), 4);
+            self.0 += 1;
+            let mut out = target.clone();
+            for p in out.pixels_mut() {
+                p.0 = p.0.map(|v| 255 - v);
+            }
+            Ok(out)
+        }
+    }
+
+    /// Every pixel goes through exactly one tile and comes back in place.
+    #[test]
+    fn boosted_swap_weaves_the_tiles_back() {
+        let mut target = RgbImage::new(8, 8);
+        for (x, y, p) in target.enumerate_pixels_mut() {
+            p.0 = [(x * 8 + y) as u8, x as u8, y as u8];
+        }
+        let mut s = Invert(0);
+        let out = swap_boosted(&mut s, &target, &SourceLatent(vec![]), 2).unwrap();
+        assert_eq!(s.0, 4);
+        for (x, y, p) in out.enumerate_pixels() {
+            assert_eq!(p.0, target.get_pixel(x, y).0.map(|v| 255 - v));
+        }
+        assert!(swap_boosted(&mut s, &RgbImage::new(6, 6), &SourceLatent(vec![]), 2).is_err());
+    }
 
     #[test]
     fn projects_and_normalizes() {

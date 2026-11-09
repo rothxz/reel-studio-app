@@ -11,7 +11,7 @@ use crate::model::{Clip, Micros};
 
 /// Bumped when the pipeline's output changes for the same inputs (part
 /// of every result's cache key).
-pub const PIPELINE_VERSION: u32 = 1;
+pub const PIPELINE_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -231,6 +231,9 @@ pub struct FaceSwapConfig {
     pub detect_threshold: f32,
     /// Frames are read at most this wide.
     pub decode_width: u32,
+    /// The swap runs at this many times the swapper's crop (1 or 2; see
+    /// `swapper::swap_boosted`): sharper, `boost`² times the work.
+    pub boost: u32,
     pub tracker: TrackerConfig,
     /// Run the models on the GPU / Neural Engine when there is one.
     pub gpu: bool,
@@ -245,6 +248,10 @@ impl FaceSwapConfig {
             decode_width: match quality {
                 Quality::Fast => 1280,
                 Quality::High => 3840,
+            },
+            boost: match quality {
+                Quality::Fast => 1,
+                Quality::High => 2,
             },
             tracker: TrackerConfig {
                 verify_every: match quality {
@@ -268,6 +275,9 @@ impl FaceSwapConfig {
         }
         if !(0.05..=0.95).contains(&t.iou_min) {
             return bad("tracking overlap out of range");
+        }
+        if !(1..=4).contains(&self.boost) {
+            return bad("swap boost out of range");
         }
         if t.verify_every == 0 {
             return bad("identity check interval is 0");

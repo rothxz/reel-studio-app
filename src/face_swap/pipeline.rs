@@ -2,7 +2,8 @@
 //! a source photo's identity, the people in a clip, and one frame's swap.
 //!
 //! A frame: detect faces → follow the chosen person (identity checks,
-//! smoothed landmarks) → align their face to the swapper's crop → swap →
+//! smoothed landmarks) → align their face to the swapper's crop (at
+//! `boost`× its size: High swaps in interleaved tiles for detail) → swap →
 //! match the frame's colour (steadied over frames) → (restore) → the crop
 //! and where it goes. Nothing outside the face is touched.
 
@@ -20,7 +21,7 @@ use super::error::{FaceSwapError, Result};
 use super::inference::Provider;
 use super::models::{self, ModelSpec};
 use super::restorer::{self, Restorer};
-use super::swapper::{FaceSwapper, Inswapper, SourceLatent};
+use super::swapper::{FaceSwapper, Inswapper, SourceLatent, swap_boosted};
 use super::tracker::{FaceTrack, TrackStep};
 use super::types::{DetectedFace, Embedding, FaceBox, FrameView};
 use crate::model::Micros;
@@ -268,6 +269,8 @@ pub struct FrameProcessor {
     cfg: FaceSwapConfig,
     latent: SourceLatent,
     pub track: FaceTrack,
+    /// The swapper's own crop side, px (the swap runs at `boost`× it).
+    swap_size: u32,
     /// The colour match, steadied over frames (None: start again).
     color: Option<[f32; 3]>,
     dt: f32,
@@ -292,6 +295,7 @@ impl FrameProcessor {
             cfg,
             latent: m.swapper.source_latent(source),
             track: FaceTrack::looking_for(1, cfg.tracker, target),
+            swap_size: m.swapper.crop_size(),
             color: None,
             dt: (frame_duration as f32 / 1e6).max(1e-3),
         }
@@ -308,10 +312,15 @@ impl FrameProcessor {
             self.color = None;
             return Ok(None);
         };
-        let size = m.swapper.crop_size();
-        let align = Similarity::align(&landmarks, &m.swapper.template());
+        let k = self.cfg.boost;
+        let size = m.swapper.crop_size() * k;
+        let template = m
+            .swapper
+            .template()
+            .map(|[x, y]| [x * k as f32, y * k as f32]);
+        let align = Similarity::align(&landmarks, &template);
         let target = warp_crop(frame, &align, size);
-        let mut swapped = m.swapper.swap(&target, &self.latent)?;
+        let mut swapped = swap_boosted(m.swapper.as_mut(), &target, &self.latent, k)?;
         let measured = color_offset(&swapped, &target, &MaskShape::SWAP, COLOR_LIMIT);
         let offset = match self.color {
             Some(c) => std::array::from_fn(|i| c[i] + (measured[i] - c[i]) * COLOR_FOLLOW),
@@ -342,9 +351,24 @@ impl FrameProcessor {
         }))
     }
 
-    /// The mask the crops of this processor are pasted through.
+    /// The mask the crops of this processor are pasted through: the face
+    /// mask for a swap; a restored crop is the whole head, its edge kept
+    /// further in.
     pub fn mask(&self) -> MaskShape {
-        MaskShape::SWAP
+        if self.cfg.restore {
+            MaskShape::SWAP
+        } else {
+            MaskShape::FACE
+        }
+    }
+
+    /// The side of the crops this processor makes, px.
+    pub fn crop_size(&self) -> u32 {
+        if self.cfg.restore {
+            restorer::SIZE
+        } else {
+            self.swap_size * self.cfg.boost
+        }
     }
 }
 
@@ -365,7 +389,7 @@ fn paste_into_crop(
         let mut c = sample_bgra(frame, p[0], p[1]);
         let q = face.apply(p);
         if q[0] >= 0. && q[1] >= 0. && q[0] <= fs - 1. && q[1] <= fs - 1. {
-            let a = MaskShape::SWAP.at(q, fs);
+            let a = MaskShape::FACE.at(q, fs);
             if a > 0. {
                 let s = sample_rgb(swapped, q[0], q[1]);
                 for i in 0..3 {

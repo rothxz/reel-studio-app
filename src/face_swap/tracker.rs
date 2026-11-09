@@ -4,10 +4,11 @@
 //! from the embedding model). Each frame, the detection that overlaps the
 //! last box most is them, as long as it overlaps enough; their identity is
 //! checked again every few frames, and whenever another face overlaps the
-//! same spot. When the overlap or the identity fails the track is lost: no
-//! swap on those frames (never another person's face). While lost, every
-//! face is compared with the person and the track resumes on one that
-//! clears a stricter bar.
+//! same spot. When the overlap or the identity fails, the faces of that
+//! same frame are compared with the person (a cut moves them in one
+//! frame); none clearing a stricter bar, the track is lost: no swap on
+//! those frames (never another person's face). While lost, every frame's
+//! faces are compared the same way and the track resumes on a match.
 //!
 //! The five landmarks are smoothed through a One-Euro filter (steady when
 //! the face holds still, little lag when it moves), measured in eye
@@ -143,13 +144,21 @@ impl FaceTrack {
         dt: f32,
         embed: &mut dyn FnMut(&DetectedFace) -> Result<Embedding>,
     ) -> Result<TrackStep> {
-        let found = match self.last {
+        // Not where they were (a cut, a jump): looked for on this same
+        // frame, so a cut doesn't leave one frame of the original face.
+        let followed = match self.last {
             Some(last) => self.follow(last, faces, embed)?,
+            None => None,
+        };
+        let jumped = followed.is_none();
+        let found = match followed {
+            Some(f) => Some(f),
             None => self.recover(faces, embed)?,
         };
         match found {
             Some((face, verified)) => {
-                if self.last.is_none() {
+                if jumped {
+                    // Somewhere new: don't glide there from the old place.
                     self.smoother.reset();
                 }
                 self.last = Some(face.bbox);
@@ -336,6 +345,29 @@ mod tests {
             }
             TrackStep::Lost => panic!("not recovered"),
         }
+    }
+
+    /// A cut puts the person somewhere else in one frame: found on that
+    /// frame (no frame of the original face), not glided over to.
+    #[test]
+    fn follows_the_person_across_a_cut() {
+        let mut t = track();
+        let mut embed = identity;
+        t.step(&[face_at(100., 0.9)], 0.033, &mut embed).unwrap();
+        match t.step(&[face_at(700., 0.9)], 0.033, &mut embed).unwrap() {
+            TrackStep::Found {
+                face, landmarks, ..
+            } => {
+                assert_eq!(face.bbox.x, 700.);
+                assert_eq!(landmarks, face.landmarks);
+            }
+            TrackStep::Lost => panic!("lost at the cut"),
+        }
+        // A stranger after the cut: still not them.
+        assert_eq!(
+            t.step(&[face_at(100., 0.1)], 0.033, &mut embed).unwrap(),
+            TrackStep::Lost
+        );
     }
 
     /// Someone steps in front of the person: overlap alone would follow
