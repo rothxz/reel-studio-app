@@ -4744,6 +4744,7 @@ dependencies = [
  "ffmpeg-next",
  "gpui",
  "image",
+ "libc",
  "metal 0.29.0",
  "objc",
  "pollster 0.4.0",

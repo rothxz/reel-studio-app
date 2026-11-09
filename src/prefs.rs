@@ -31,6 +31,11 @@ pub struct Prefs {
     pub caption_style: String,
     /// Captions › Auto captions: the spoken language picked last.
     pub caption_language: String,
+    /// Settings → Storage Usage → Auto-remove cache (src/storage.rs).
+    pub keep_cache: crate::storage::KeepCache,
+    /// Settings → Storage Usage → Maximum cache size: index into
+    /// `storage::LIMITS` (the last, no limit, by default).
+    pub cache_limit: usize,
 }
 
 impl Default for Prefs {
@@ -49,6 +54,8 @@ impl Default for Prefs {
             language: None,
             caption_style: crate::caption_styles::DEFAULT.into(),
             caption_language: "en".into(),
+            keep_cache: crate::storage::KeepCache::Forever,
+            cache_limit: crate::storage::LIMITS.len() - 1,
         }
     }
 }
@@ -89,6 +96,14 @@ fn path() -> PathBuf {
 }
 
 impl Prefs {
+    /// The Maximum cache size in bytes (None: no limit).
+    pub fn cache_limit_bytes(&self) -> Option<u64> {
+        crate::storage::LIMITS
+            .get(self.cache_limit)
+            .copied()
+            .flatten()
+    }
+
     pub fn load() -> Prefs {
         std::fs::read_to_string(path())
             .ok()

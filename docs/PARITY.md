@@ -34,9 +34,18 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [~] Settings dialog: General (Language), Updates, Privacy (share
-  anonymous usage data) and About (version). *No appearance or storage
-  yet.*
+- [~] Settings dialog: General (Language, Data and Storage), Updates,
+  Privacy (share anonymous usage data) and About (version). *No
+  appearance yet.*
+- [x] Data and Storage (Settings pages with a back arrow): Storage Usage
+  (donut, cache categories ticked over one Clear button, refused while an
+  export / captions / agent job runs; the user's own data; Auto-remove
+  cache and Maximum cache size, applied at launch), Data Usage (download
+  counts per kind since a date, reset) and AI models (speech models and
+  the natural voice: delete one or all). *No Wi-Fi / mobile split (a
+  desktop has no cellular); fonts and thumbnails have no disk cache here;
+  the older desktop build's own files in the data folder aren't counted.
+  Desktop-only strings (natural voice, AI models notes) stay English.*
 - [~] Languages: English, Khmer, Vietnamese, Simplified Chinese,
   Indonesian (Settings → Language, "Same as device" by default; the UI
   and the app menu switch at once). The app's dictionaries are compiled

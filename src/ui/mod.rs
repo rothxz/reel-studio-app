@@ -23,6 +23,7 @@ pub mod library;
 pub mod player;
 pub mod settings;
 pub mod speed_curve;
+pub mod storage;
 pub mod text_input;
 pub mod text_panel;
 pub mod timeline;

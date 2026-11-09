@@ -1,7 +1,8 @@
 //! Settings (app menu → Settings…, ⌘, or the home screen's gear): the old
 //! desktop Settings dialog. So far the language (General), its Updates
 //! group (check, download, restart), the usage-data switch (Privacy) and
-//! the version; appearance and the editing defaults are still to come
+//! the version, and Data and Storage (its pages: ui/storage.rs);
+//! appearance and the editing defaults are still to come
 //! (docs/PARITY.md). Found and downloaded
 //! versions also show in the update dialog (ui/update_dialog.rs).
 
@@ -23,6 +24,7 @@ impl Editor {
     /// Opens Settings (and, when asked, checks for updates).
     pub fn open_settings(&mut self, check: bool, cx: &mut Context<Self>) {
         self.settings_open = true;
+        self.settings_pages.clear();
         self.popup = None;
         if check {
             self.updater.update(cx, |u, cx| u.check(cx));
@@ -44,7 +46,12 @@ impl Editor {
         };
         let width = MAX_WIDTH.min(f32::from(viewport.width) * 0.92);
         let height = MAX_HEIGHT.min(f32::from(viewport.height) * 0.88);
-        let version = updater::VERSION;
+        let page = self.settings_pages.last().copied();
+        let title = page.map_or("Settings", |p| p.title());
+        let body: Vec<AnyElement> = match page {
+            Some(page) => self.render_storage_page(page, cx),
+            None => self.settings_main(cx),
+        };
         div()
             .id("settings-backdrop")
             .absolute()
@@ -78,12 +85,35 @@ impl Editor {
                             .items_center()
                             .border_b_1()
                             .border_color(theme::hairline())
+                            .when(page.is_some(), |d| {
+                                d.child(
+                                    div()
+                                        .id("settings-back")
+                                        .size(px(28.))
+                                        .mr(px(6.))
+                                        .ml(px(-6.))
+                                        .rounded(px(6.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(theme::fill_subtle()))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|ed, _, _, cx| {
+                                                cx.stop_propagation();
+                                                ed.settings_back(cx)
+                                            }),
+                                        )
+                                        .child(Icon::ChevronBack.el(18., theme::text_secondary())),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex_1()
                                     .text_size(px(theme::LG))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(t("Settings")),
+                                    .child(t(title)),
                             )
                             .child(
                                 div()
@@ -107,25 +137,49 @@ impl Editor {
                             .overflow_y_scroll()
                             .p(px(20.))
                             .pb(px(4.))
-                            .child(group("GENERAL", vec![self.language_row(cx)]))
-                            .child(group("UPDATES", vec![self.update_row(cx)]))
-                            .child(group("PRIVACY", vec![self.usage_data_row(cx)]))
-                            .child(group(
-                                "ABOUT",
-                                vec![
-                                    row(Icon::InformationCircle, "Version", None)
-                                        .child(
-                                            div()
-                                                .text_size(px(theme::SM))
-                                                .text_color(theme::text_secondary())
-                                                .child(version),
-                                        )
-                                        .into_any_element(),
-                                ],
-                            )),
+                            .children(body),
                     ),
             )
             .into_any_element()
+    }
+
+    /// The first page: General, Updates, Privacy, About.
+    fn settings_main(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let version = updater::VERSION;
+        vec![
+            group(
+                "GENERAL",
+                vec![
+                    self.language_row(cx),
+                    row(Icon::PieChart, "Data and Storage", None)
+                        .id("settings-storage")
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::fill_subtle()))
+                        .child(Icon::ChevronForward.el(14., theme::text_tertiary()))
+                        .on_click(cx.listener(|ed, _, _, cx| {
+                            ed.settings_push(crate::ui::storage::SettingsPage::DataStorage, cx)
+                        }))
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+            group("UPDATES", vec![self.update_row(cx)]).into_any_element(),
+            group("PRIVACY", vec![self.usage_data_row(cx)]).into_any_element(),
+            group(
+                "ABOUT",
+                vec![
+                    row(Icon::InformationCircle, "Version", None)
+                        .child(
+                            div()
+                                .text_size(px(theme::SM))
+                                .text_color(theme::text_secondary())
+                                .child(version),
+                        )
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
     }
 
     /// Settings → Language: "Same as device" or one of the languages, each
@@ -294,20 +348,31 @@ impl Editor {
 
 /// A titled card of rows.
 fn group(title: &'static str, rows: Vec<AnyElement>) -> gpui::Div {
+    group_with(Some(title), rows, None)
+}
+
+/// A card of rows, with a title over it and a note under it.
+pub(crate) fn group_with(
+    title: Option<&'static str>,
+    rows: Vec<AnyElement>,
+    footer: Option<&'static str>,
+) -> gpui::Div {
     let count = rows.len();
     div()
         .mb(px(18.))
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(
-            div()
-                .px(px(2.))
-                .font_family(theme::font_mono())
-                .text_size(px(theme::SM))
-                .text_color(theme::text_faint())
-                .child(t(title)),
-        )
+        .when_some(title, |d, title| {
+            d.child(
+                div()
+                    .px(px(2.))
+                    .font_family(theme::font_mono())
+                    .text_size(px(theme::SM))
+                    .text_color(theme::text_faint())
+                    .child(t(title)),
+            )
+        })
         .child(
             div()
                 .rounded(px(12.))
@@ -323,10 +388,19 @@ fn group(title: &'static str, rows: Vec<AnyElement>) -> gpui::Div {
                         .child(r)
                 })),
         )
+        .when_some(footer, |d, footer| {
+            d.child(
+                div()
+                    .px(px(2.))
+                    .text_size(px(theme::SM))
+                    .text_color(theme::text_tertiary())
+                    .child(t(footer)),
+            )
+        })
 }
 
 /// A settings row: icon, label (and a line under it), then what follows.
-fn row(icon: Icon, label: &'static str, sub: Option<SharedString>) -> gpui::Div {
+pub(crate) fn row(icon: Icon, label: &'static str, sub: Option<SharedString>) -> gpui::Div {
     div()
         .min_h(px(48.))
         .px(px(16.))

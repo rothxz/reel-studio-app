@@ -319,6 +319,10 @@ pub struct Editor {
     pub(crate) shortcuts_open: bool,
     /// Settings, and the app updater it shows.
     pub(crate) settings_open: bool,
+    /// Settings pages open past the first (Data and Storage…), last on top.
+    pub(crate) settings_pages: Vec<crate::ui::storage::SettingsPage>,
+    /// What Settings → Data and Storage measured.
+    pub(crate) storage: crate::ui::storage::StorageView,
     pub(crate) updater: gpui::Entity<crate::updater::Updater>,
     /// The update dialog, opened from the menu's Check for Updates… (it
     /// also opens by itself when a check finds a new version).
@@ -564,6 +568,8 @@ impl Editor {
             fullscreen: false,
             shortcuts_open: false,
             settings_open: false,
+            settings_pages: vec![],
+            storage: Default::default(),
             updater,
             update_dialog_open: false,
             update_hidden: None,
@@ -1329,8 +1335,12 @@ impl Editor {
         }
         if self.settings_open {
             if id == Shortcut::Deselect {
-                self.settings_open = false;
-                cx.notify();
+                if self.settings_pages.is_empty() {
+                    self.settings_open = false;
+                    cx.notify();
+                } else {
+                    self.settings_back(cx);
+                }
             }
             return;
         }

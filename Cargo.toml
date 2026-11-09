@@ -29,6 +29,10 @@ ureq = "3"
 wgpu = { version = "25", optional = true, default-features = false, features = ["glsl", "metal"] }
 pollster = { version = "0.4", optional = true }
 
+# Free disk space for Settings → Storage Usage (statvfs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # The effect / filter passes of the preview (gpui already links both).
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.29"

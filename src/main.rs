@@ -11,6 +11,7 @@ mod captions;
 mod catalog;
 mod clip_edits;
 mod crop;
+mod data_usage;
 mod decoder;
 mod editor;
 mod effects;
@@ -30,6 +31,7 @@ mod shortcuts;
 mod speech;
 mod speed_curve;
 mod stickers;
+mod storage;
 mod text_render;
 mod theme;
 mod transitions;
@@ -141,7 +143,10 @@ pub fn set_app_menus(cx: &mut App) {
 
 fn main() {
     // The UI language before anything shows a string (Settings → Language).
-    i18n::set_locale(i18n::resolve(prefs::Prefs::load().language.as_deref()));
+    let prefs = prefs::Prefs::load();
+    i18n::set_locale(i18n::resolve(prefs.language.as_deref()));
+    // Settings → Storage Usage's limits, before anything reads the cache.
+    storage::trim(prefs.keep_cache, prefs.cache_limit_bytes());
     decoder::init();
     text_render::warm_up();
     let app = Application::new().with_assets(ui::icons::Assets);

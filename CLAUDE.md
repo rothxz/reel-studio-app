@@ -86,6 +86,9 @@ src/clip_edits.rs the toolbar's one-shot clip edits on the document:
 src/crop.rs        crop math (box, handles, ratio fit, straighten cover)
 src/projects.rs    projects folder: list / load / save (atomic) / delete
 src/prefs.rs       panel sizes + timeline switches, data folder
+src/storage.rs     what the data folder holds by category (Settings → Data
+                   and Storage): measure, clear the cache, launch trim
+src/data_usage.rs  bytes the app's features downloaded, per kind
 src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
 src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source,
                    filmstrip tile thread, waveform peaks
@@ -136,7 +139,8 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    crop (the Crop dialog), layers (Arrange layers),
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
-                   dialogs (popup, confirm, shortcuts), export (save
+                   dialogs (popup, confirm, shortcuts), settings +
+                   storage (its Data and Storage pages), export (save
                    dialog + the export screen), agent (the AI
                    agent panel + its turn loop), widgets,
                    icons (icon fonts served as SVG)

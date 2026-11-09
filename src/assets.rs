@@ -168,7 +168,20 @@ pub fn fetch(bucket: &str, key: &str) -> Result<Vec<u8>> {
             None => bail!("no asset host configured"),
         }
     };
-    download_to(&url, &path, 32 << 20)
+    let bytes = download_to(&url, &path, 32 << 20)?;
+    count(bucket, bytes.len());
+    Ok(bytes)
+}
+
+/// Counts a download for Data Usage (tile pictures and sticker files are
+/// previews, not counted).
+fn count(bucket: &str, bytes: usize) {
+    use crate::data_usage::{Kind, record};
+    match bucket {
+        EFFECT_PACKAGES => record(Kind::Effects, bytes as u64),
+        SOUND_EFFECTS => record(Kind::Sounds, bytes as u64),
+        _ => {}
+    }
 }
 
 /// A local copy of `key` (see `fetch`), for things read by path (sound
@@ -188,7 +201,8 @@ pub fn fetch_file(bucket: &str, key: &str) -> Result<PathBuf> {
                 None => bail!("no asset host configured"),
             }
         };
-        download_to(&url, &path, 256 << 20)?;
+        let bytes = download_to(&url, &path, 256 << 20)?;
+        count(bucket, bytes.len());
     }
     Ok(path)
 }
