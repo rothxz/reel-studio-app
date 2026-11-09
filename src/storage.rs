@@ -10,11 +10,12 @@
 //! other      <data>/cache/sound-effects     the host copies of sounds
 //!            <data>/cache/openverse         sound search answers
 //!            <data>/cache/captions          auto-caption scratch audio
+//!            <data>/cache/face-swap         processed face swaps (made again)
 //!
 //! projects   <data>/projects, <data>/agent/scenes, <data>/agent/voice
 //! sounds     <data>/library/sound-effects, <data>/library/openverse
 //! music      <data>/library/music           (clips point at these files)
-//! aiModels   <data>/models (speech to text), <data>/agent/speech (voice)
+//! aiModels   <data>/models (speech to text, face swap), <data>/agent/speech (voice)
 //! ```
 //!
 //! The data folder is shared with the older desktop build, whose own files
@@ -89,6 +90,7 @@ impl Category {
                 cache.join(crate::assets::SOUND_EFFECTS),
                 cache.join("openverse"),
                 cache.join("captions"),
+                cache.join("face-swap"),
             ],
         }
     }

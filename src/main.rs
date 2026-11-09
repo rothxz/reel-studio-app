@@ -18,6 +18,7 @@ mod effects;
 mod encode;
 mod engine;
 mod export;
+mod face_swap;
 mod gizmo;
 mod history;
 mod i18n;

@@ -24,6 +24,7 @@ impl Writer {
                 bitrate: 10_000_000,
                 input: PixelOrder::Rgba,
                 audio: false,
+                comment: None,
             },
         )
         .map(Writer)

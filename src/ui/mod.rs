@@ -12,6 +12,7 @@ pub mod color_row;
 pub mod crop;
 pub mod dialogs;
 pub mod export;
+pub mod face_swap;
 pub mod fx;
 pub mod gizmo;
 pub mod header;

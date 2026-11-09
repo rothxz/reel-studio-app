@@ -336,6 +336,11 @@ impl FrameReader {
         })
     }
 
+    /// One frame's length (from the stream's average rate).
+    pub fn frame_duration(&self) -> Micros {
+        self.dec.frame_dur
+    }
+
     /// The frame showing at `target`; None when the file has none there
     /// (empty, or unreadable from that point).
     pub fn frame_at(&mut self, target: Micros) -> anyhow::Result<Option<Arc<DecodedFrame>>> {

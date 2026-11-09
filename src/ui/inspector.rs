@@ -59,6 +59,25 @@ const VISUAL_CLIP: Tab = Tab {
         },
     ],
 };
+// Video clips also get Face Swap (it follows a person through frames).
+const VISUAL_VIDEO: Tab = Tab {
+    label: "Visual",
+    entries: &[
+        e("basic", "Basic"),
+        e("rotate", "Rotate"),
+        e("removeBg", "Remove BG"),
+        e("faceSwap", "Face Swap"),
+        e("mask", "Mask"),
+        Entry {
+            overlay: true,
+            ..e("splice", "Splice")
+        },
+        Entry {
+            main_lane: true,
+            ..e("background", "Background")
+        },
+    ],
+};
 const VISUAL_BASIC: Tab = Tab {
     label: "Visual",
     entries: &[e("basic", "Basic")],
@@ -73,7 +92,7 @@ const ADJUST_CLIP: Tab = Tab {
 };
 
 const VIDEO_TABS: &[Tab] = &[
-    VISUAL_CLIP,
+    VISUAL_VIDEO,
     Tab {
         label: "Audio",
         entries: &[e("volume", "Volume")],
@@ -387,6 +406,7 @@ impl Editor {
             Some("basic") => self.render_basic_panel(clip, cx),
             Some("rotate") => self.render_rotate_panel(clip, main_lane, cx),
             Some("removeBg") => self.render_cutout_panel(clip, cx),
+            Some("faceSwap") => self.render_face_swap_panel(clip, cx),
             Some("mask") => self.render_mask_panel(clip, cx),
             Some("splice") => self.render_splice_panel(clip, cx),
             Some("background") => self.render_background_panel(clip, cx),

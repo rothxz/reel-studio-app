@@ -28,6 +28,11 @@ ureq = "3"
 # macOS, on macOS only with the `wgpu-effects` feature (to test it there).
 wgpu = { version = "25", optional = true, default-features = false, features = ["glsl", "metal"] }
 pollster = { version = "0.4", optional = true }
+# Face swap inference (src/face_swap/): ONNX Runtime, its prebuilt library
+# fetched at build time. The models are never bundled (<data>/models/face-swap).
+# `half`: fp16 model inputs. GPU providers per platform below.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-31", "half"] }
+half = "2"
 
 # Free disk space for Settings → Storage Usage (statvfs).
 [target.'cfg(unix)'.dependencies]
@@ -41,6 +46,12 @@ objc = "0.2"
 block = "0.1"
 # The AI agent's API keys, kept in the login keychain.
 security-framework = "3"
+# Face swap on the GPU / Neural Engine (falls back to the CPU per op).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml"] }
+
+# Face swap on any DirectX 12 GPU.
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directml"] }
 
 # Off macOS the preview draws on wgpu: Vulkan (Linux), DX12 or Vulkan (Windows).
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -61,6 +72,8 @@ cpp-engine = []
 # tests there: `cargo test --features wgpu-effects`. The app still draws
 # with Metal on macOS.
 wgpu-effects = ["dep:wgpu", "dep:pollster"]
+# Face swap on NVIDIA GPUs (needs the CUDA 12 + cuDNN 9 runtime installed).
+cuda = ["ort/cuda"]
 
 # Keep target/debug small: line numbers for our crate, no debug info for
 # dependencies (full symbols for GPUI's tree cost >10 GB).
