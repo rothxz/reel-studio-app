@@ -110,6 +110,11 @@ masks, blends, effects or filters, because all of that ran on Metal.
   AppImage (`usr/lib/reel-studio/`) and next to the program in the tar.gz.
   For a dev build: fetch it next to the binary, or set `ORT_DYLIB_PATH`.
   Bumping ort's `api-NN` means bumping that script's version too.
+  Intel Macs load it too (ort has no x86_64 macOS build): Microsoft's last
+  Intel one, 1.23.2 (`api-23`, macOS 13.4+), from the app's
+  `Contents/Frameworks` (`packaging/macos/fetch-onnxruntime.sh`; signed
+  with the app). `cfg(ort_dynamic)` (build.rs) marks both targets; CI
+  type-checks the Intel build.
 - `packaging/windows/bundle.ps1` + `reel-studio.iss`:
   - A zip, and an Inno Setup installer that installs per user into
     `%LOCALAPPDATA%\Programs\Reel Studio`: no admin rights, and a folder

@@ -119,7 +119,7 @@ English · ខ្មែរ (Khmer) · Tiếng Việt · 简体中文 · Bahasa I
 
 |         | Minimum                                                                   |
 | ------- | ------------------------------------------------------------------------- |
-| macOS   | 12 Monterey or later, Apple Silicon or Intel                              |
+| macOS   | 12 Monterey or later, Apple Silicon or Intel (face swap on Intel: macOS 13.4+) |
 | Windows | Windows 10 or 11, 64-bit                                                  |
 | Linux   | x86_64 or ARM64 desktop, X11 or Wayland, glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 38+ or similar) |
 | Memory  | 8 GB RAM recommended for 4K editing                                       |

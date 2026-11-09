@@ -124,9 +124,10 @@ src/agent/         the AI agent: providers, keys (keychain), llm (Ollama /
 src/face_swap/     AI face swap on this computer: model registry (pinned
                    URLs, SHA-256, licences, download), ONNX Runtime
                    sessions (`ort`; Core ML / DirectML / CUDA, CPU
-                   fallback), runtime (ONNX Runtime linked in on macOS /
-                   Windows, loaded on Linux from the library the release
-                   ships), detector (YuNet), five-point align,
+                   fallback), runtime (ONNX Runtime linked in on Apple
+                   silicon / Windows, loaded on Linux and Intel Macs from
+                   the library the release ships: `cfg(ort_dynamic)`),
+                   detector (YuNet), five-point align,
                    embedder (ArcFace), swapper trait (inswapper 128),
                    restorer (GFPGAN), mask / colour match / paste,
                    tracker (identity checks, One-Euro landmarks), the

@@ -281,6 +281,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # The API fallback for the pinned ONNX Runtime (Intel; rate limit).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           packaging/macos/bundle.sh "target/${{ matrix.target }}/release/reel-studio-gpui" \
             "$VERSION" "${{ matrix.arch }}" dist
