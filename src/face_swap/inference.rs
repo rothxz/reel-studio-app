@@ -41,16 +41,24 @@ impl Provider {
 }
 
 fn environment() -> Result<&'static Environment> {
-    static ENV: OnceLock<std::result::Result<Environment, String>> = OnceLock::new();
+    static ENV: OnceLock<Result<Environment>> = OnceLock::new();
     ENV.get_or_init(|| {
-        ort::init()
+        runtime()?
             .with_name("reel-face-swap")
             .with_telemetry(false)
             .build()
-            .map_err(|e| e.to_string())
+            .map_err(|e| FaceSwapError::Inference(e.to_string()))
     })
     .as_ref()
-    .map_err(|e| FaceSwapError::Inference(e.clone()))
+    .map_err(Clone::clone)
+}
+
+/// ONNX Runtime: linked in on macOS and Windows, loaded on Linux.
+fn runtime() -> Result<ort::environment::EnvironmentBuilder> {
+    #[cfg(target_os = "linux")]
+    return super::runtime::load().map_err(FaceSwapError::RuntimeMissing);
+    #[cfg(not(target_os = "linux"))]
+    Ok(ort::init())
 }
 
 /// One declared input / output: name, element type, shape (-1 = dynamic).
@@ -266,5 +274,64 @@ mod tests {
         assert!(check_shape(&port, &[1, 3, 640, 480]).is_ok());
         assert!(check_shape(&port, &[1, 4, 640, 480]).is_err());
         assert!(check_shape(&port, &[3, 640, 480]).is_err());
+    }
+
+    /// A one-node ONNX model (`y = Relu(x)`, x: float[3]), written out as
+    /// its protobuf by hand.
+    fn relu_model() -> Vec<u8> {
+        fn varint(mut v: u64, out: &mut Vec<u8>) {
+            while v >= 0x80 {
+                out.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        }
+        fn int(field: u64, v: u64) -> Vec<u8> {
+            let mut out = vec![];
+            varint(field << 3, &mut out);
+            varint(v, &mut out);
+            out
+        }
+        fn bytes(field: u64, body: &[u8]) -> Vec<u8> {
+            let mut out = vec![];
+            varint(field << 3 | 2, &mut out);
+            varint(body.len() as u64, &mut out);
+            out.extend_from_slice(body);
+            out
+        }
+        // ValueInfoProto { name, type: { tensor_type: { elem_type: FLOAT, shape: [3] } } }
+        let value = |name: &str| {
+            let dim = bytes(1, &int(1, 3));
+            let tensor = [int(1, 1), bytes(2, &dim)].concat();
+            [bytes(1, name.as_bytes()), bytes(2, &bytes(1, &tensor))].concat()
+        };
+        let node = [bytes(1, b"x"), bytes(2, b"y"), bytes(4, b"Relu")].concat();
+        let graph = [
+            bytes(1, &node),
+            bytes(2, b"g"),
+            bytes(11, &value("x")),
+            bytes(12, &value("y")),
+        ]
+        .concat();
+        let opset = int(2, 13);
+        [int(1, 8), bytes(7, &graph), bytes(8, &opset)].concat()
+    }
+
+    /// ONNX Runtime starts and runs a model on the CPU (on Linux: its
+    /// library is found and loads). `cargo test runtime_runs_a_model --
+    /// --ignored`, with the library next to the test binary or in
+    /// `ORT_DYLIB_PATH`.
+    #[test]
+    #[ignore]
+    fn runtime_runs_a_model() {
+        let path = std::env::temp_dir().join(format!("relu-{}.onnx", std::process::id()));
+        std::fs::write(&path, relu_model()).unwrap();
+        let loaded = Model::load(&path, false, None);
+        let _ = std::fs::remove_file(&path);
+        let mut model = loaded.unwrap();
+        assert_eq!(model.provider, Provider::Cpu);
+        assert_eq!(model.inputs[0].shape, [3]);
+        let out = model.run(vec![(vec![3], vec![-1.0, 0.5, 2.0])]).unwrap();
+        assert_eq!(out[0].data, [0.0, 0.5, 2.0]);
     }
 }

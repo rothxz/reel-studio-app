@@ -5,6 +5,7 @@
 //! ```text
 //! models     the model registry: pinned URLs, SHA-256, licences, download
 //! inference  ONNX Runtime sessions (providers, CPU fallback, shape checks)
+//! runtime    where ONNX Runtime's library comes from (loaded on Linux)
 //! detector   faces + five landmarks (YuNet)
 //! align      five-point similarity alignment, warps
 //! embedder   identity vectors (ArcFace)
@@ -37,6 +38,7 @@ pub mod models;
 pub mod onnx;
 pub mod pipeline;
 pub mod restorer;
+pub mod runtime;
 pub mod swapper;
 pub mod tracker;
 pub mod types;

@@ -28,10 +28,12 @@ ureq = "3"
 # macOS, on macOS only with the `wgpu-effects` feature (to test it there).
 wgpu = { version = "25", optional = true, default-features = false, features = ["glsl", "metal"] }
 pollster = { version = "0.4", optional = true }
-# Face swap inference (src/face_swap/): ONNX Runtime, its prebuilt library
-# fetched at build time. The models are never bundled (<data>/models/face-swap).
-# `half`: fp16 model inputs. GPU providers per platform below.
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-31", "half"] }
+# Face swap inference (src/face_swap/): ONNX Runtime. On macOS and Windows
+# its prebuilt library is fetched at build time and linked in; on Linux it's
+# loaded at run time (below). The models are never bundled
+# (<data>/models/face-swap). `half`: fp16 model inputs. GPU providers per
+# platform below.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-31", "half"] }
 half = "2"
 
 # Free disk space for Settings → Storage Usage (statvfs).
@@ -47,11 +49,19 @@ block = "0.1"
 # The AI agent's API keys, kept in the login keychain.
 security-framework = "3"
 # Face swap on the GPU / Neural Engine (falls back to the CPU per op).
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml", "download-binaries", "copy-dylibs", "tls-native"] }
 
 # Face swap on any DirectX 12 GPU.
 [target.'cfg(windows)'.dependencies]
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directml"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directml", "download-binaries", "copy-dylibs", "tls-native"] }
+
+# Face swap on Linux loads ONNX Runtime when it starts
+# (src/face_swap/runtime.rs): the library ort would link was built on a
+# newer glibc (2.38+) than the release supports (Ubuntu 22.04's 2.35), so
+# the release ships Microsoft's own build next to the program
+# (packaging/linux/fetch-onnxruntime.sh).
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
 
 # Off macOS the preview draws on wgpu: Vulkan (Linux), DX12 or Vulkan (Windows).
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -72,7 +82,8 @@ cpp-engine = []
 # tests there: `cargo test --features wgpu-effects`. The app still draws
 # with Metal on macOS.
 wgpu-effects = ["dep:wgpu", "dep:pollster"]
-# Face swap on NVIDIA GPUs (needs the CUDA 12 + cuDNN 9 runtime installed).
+# Face swap on NVIDIA GPUs (needs the CUDA 12 + cuDNN 9 runtime installed;
+# on Linux also a CUDA build of ONNX Runtime, through ORT_DYLIB_PATH).
 cuda = ["ort/cuda"]
 
 # Keep target/debug small: line numbers for our crate, no debug info for

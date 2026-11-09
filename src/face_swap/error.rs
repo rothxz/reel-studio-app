@@ -10,6 +10,10 @@ pub enum FaceSwapError {
     ModelMismatch(&'static str),
     /// A model's inputs / outputs aren't what the pipeline was written for.
     ModelShape(String),
+    /// ONNX Runtime's library isn't there or won't load (Linux, where it
+    /// isn't linked in): what was looked for.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    RuntimeMissing(String),
     /// ONNX Runtime failed (load or run).
     Inference(String),
     /// The source photo has no face the detector is sure of.
@@ -31,6 +35,7 @@ impl fmt::Display for FaceSwapError {
                 "The {id} model file doesn't match its checksum; download it again"
             ),
             Self::ModelShape(m) => write!(f, "Unexpected model: {m}"),
+            Self::RuntimeMissing(m) => write!(f, "{m}"),
             Self::Inference(m) => write!(f, "Face model error: {m}"),
             Self::NoSourceFace => write!(f, "No face found in the source photo"),
             Self::TargetNotFound => write!(
