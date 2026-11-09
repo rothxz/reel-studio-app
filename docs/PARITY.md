@@ -34,9 +34,22 @@ isn't listed.
   ⌘O imports a project JSON (copy), ⌘⇧S writes a copy elsewhere.
 - [~] App menu: File, Edit, View, Playback built from the shortcut table
   (same labels and keys). *No Help menu yet.*
-- [~] Settings dialog: General (Language), Updates, Privacy (share
-  anonymous usage data) and About (version). *No appearance or storage
-  yet.*
+- [~] Settings dialog: General (Language, Data and Storage), Updates,
+  Privacy (share anonymous usage data), Help (Report a bug: a mail
+  draft with app version, OS and language), Follow us (Instagram,
+  Facebook) and About (Privacy Policy, Terms of Use, Data deletion,
+  version), the links opened in the browser (src/links.rs). *No
+  appearance yet; no replay-onboarding or tips rows (the desktop has
+  neither).*
+- [x] Data and Storage (Settings pages with a back arrow): Storage Usage
+  (donut, cache categories ticked over one Clear button, refused while an
+  export / captions / agent job runs; the user's own data; Auto-remove
+  cache and Maximum cache size, applied at launch), Data Usage (download
+  counts per kind since a date, reset) and AI models (speech models and
+  the natural voice: delete one or all). *No Wi-Fi / mobile split (a
+  desktop has no cellular); fonts and thumbnails have no disk cache here;
+  the older desktop build's own files in the data folder aren't counted.
+  Desktop-only strings (natural voice, AI models notes) stay English.*
 - [~] Languages: English, Khmer, Vietnamese, Simplified Chinese,
   Indonesian (Settings → Language, "Same as device" by default; the UI
   and the app menu switch at once). The app's dictionaries are compiled
@@ -297,6 +310,21 @@ isn't listed.
     Animation · Adjust ✓. *Speed › Normal: log slider 0.1–100× snapping to
     1×, read-out, length before → after, reset; one undo step per drag;
     a constant speed drops any curve.*
+    - [x] Visual › Face Swap (`ui/face_swap.rs`, pipeline in
+      `src/face_swap/`; new here, the old editor has none): a face from
+      a photo on a chosen person, on this computer (ONNX Runtime; Core ML
+      / DirectML / CUDA, CPU fallback). Models downloaded once after a
+      licence prompt (pinned URLs + SHA-256; inswapper and ArcFace are
+      non-commercial), consent prompt per photo, Detect faces → person
+      tiles, Blend, Fast / High, restoration (GFPGAN, High), Process with
+      progress / cancel / errors. Non-destructive: `faceSwap` on the
+      clip, results in `<data>/cache/face-swap` pasted over decoded
+      frames by the player and export (export refuses unprocessed
+      swaps and tags the MP4 as AI-edited); timeline tag "AI FACE";
+      models and results in Settings → Data and Storage. *Not yet:
+      occlusion masks (a hand over the face is pasted over), a
+      commercially licensed swap model, showing frames while a job
+      runs, image clips, the agent tool, translations.*
     - [x] Speed › Curve (`ui/speed_curve.rs`, document side
       `speed_curve.rs`): None, Custom and six ramp tiles with their
       shapes; with one on, a card: name, length before → after, the

@@ -33,8 +33,8 @@ Timeline editing, trending effects, auto captions and one-click background remov
 | **macOS** (Apple Silicon)    | [Download `.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-mac-arm64.dmg)                 | Signed & notarized by Apple                  |
 | **macOS** (Intel)            | [Download `.dmg`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-mac-x64.dmg)                   | Signed & notarized by Apple                  |
 | **Windows** 10 / 11 (64-bit) | [Download installer](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-windows-x64-setup.exe)      | See [first launch](#first-launch)            |
-| **Linux** (x86_64)           | [Download `.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-x64.AppImage)       | Portable AppImage, no install                |
-| **Linux** (ARM64)            | [Download `.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-arm64.AppImage)     | Portable AppImage, no install                |
+| **Linux** (x86_64)           | [`.deb`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-amd64.deb) · [`.rpm`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-x86_64.rpm) · [`.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-x64.AppImage) | `.deb` Ubuntu / Debian, `.rpm` Fedora / openSUSE, AppImage needs no install |
+| **Linux** (ARM64)            | [`.deb`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-arm64.deb) · [`.rpm`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-aarch64.rpm) · [`.AppImage`](https://github.com/rothxz/reel-studio-app/releases/latest/download/Reel-Studio-linux-arm64.AppImage) | Same, for ARM64 |
 | **Android**                  | [Google Play](https://play.google.com/store/apps/details?id=com.reelstudio.app)                            | Available now                                |
 | **iPhone**                   | App Store                                                                                                  | In review, coming soon                       |
 
@@ -99,12 +99,21 @@ English · ខ្មែរ (Khmer) · Tiếng Việt · 简体中文 · Bahasa I
 
 - **macOS**: open the `.dmg` and drag Reel Studio to Applications. The app is notarized by Apple, so it opens like any other app.
 - **Windows**: the installer is not code-signed yet, so Windows SmartScreen may warn you. Click **More info → Run anyway**.
-- **Linux**: make the AppImage executable, then run it:
+- **Linux**, pick one:
+  - **Ubuntu, Debian, Mint, Pop!_OS**: open the `.deb` with Software Install, or
+    ```sh
+    sudo apt install ./Reel-Studio-linux-amd64.deb
+    ```
+  - **Fedora, RHEL**: `sudo dnf install ./Reel-Studio-linux-x86_64.rpm`
+  - **openSUSE**: `sudo zypper install --allow-unsigned-rpm ./Reel-Studio-linux-x86_64.rpm`
+  - **Any distribution, no install**: make the AppImage executable and run it. Only the AppImage updates itself; for a `.deb` / `.rpm`, install the new version's package over the old one.
+    ```sh
+    chmod +x Reel-Studio-linux-x64.AppImage
+    ./Reel-Studio-linux-x64.AppImage
+    ```
+    If it doesn't start (no FUSE on the system), run it with `--appimage-extract-and-run`.
 
-  ```sh
-  chmod +x Reel-Studio-linux-x64.AppImage
-  ./Reel-Studio-linux-x64.AppImage
-  ```
+  Installed from a `.deb` or `.rpm`, Reel Studio appears in the app menu.
 
 ### System requirements
 
@@ -112,7 +121,7 @@ English · ខ្មែរ (Khmer) · Tiếng Việt · 简体中文 · Bahasa I
 | ------- | ------------------------------------------------------------------------- |
 | macOS   | 12 Monterey or later, Apple Silicon or Intel                              |
 | Windows | Windows 10 or 11, 64-bit                                                  |
-| Linux   | x86_64 desktop with a recent glibc (Ubuntu 22.04+, Fedora 38+ or similar) |
+| Linux   | x86_64 or ARM64 desktop, X11 or Wayland, glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 38+ or similar) |
 | Memory  | 8 GB RAM recommended for 4K editing                                       |
 
 ## Feedback

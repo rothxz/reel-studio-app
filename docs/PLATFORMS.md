@@ -95,8 +95,21 @@ masks, blends, effects or filters, because all of that ran on Metal.
   the same static, LGPL, decode-only FFmpeg 9.0.2 as macOS (Windows: built
   by MSVC in MSYS2, with zlib from source).
 - `packaging/linux/bundle.sh`: AppImage (appimagetool 1.9.1, pinned by
-  SHA-256) and tar.gz; fails if the binary needs a missing library or a
-  shared FFmpeg.
+  SHA-256), tar.gz, `.deb` (`dpkg-deb`, Depends from `dpkg-shlibdeps`)
+  and `.rpm` (`rpmbuild`, requires found from the binaries); fails if the
+  binary needs a missing library or a shared FFmpeg. The packages install
+  to `/usr/bin` + `/usr/lib/reel-studio` with the menu entry and icon; the
+  release installs the `.deb` on Ubuntu 22.04 and the `.rpm` in a Fedora
+  container before uploading them. Only the AppImage updates itself
+  (`$APPIMAGE`); a package install shows updates as unsupported.
+- Face swap's ONNX Runtime on Linux is loaded at run time, not linked
+  (`src/face_swap/runtime.rs`): the prebuilt library ort links in needs
+  glibc 2.38+, and the release builds on Ubuntu 22.04 (2.35).
+  `packaging/linux/fetch-onnxruntime.sh` fetches Microsoft's 1.31.0 CPU
+  build (glibc 2.28+, pinned by SHA-256); `bundle.sh` ships it in the
+  AppImage (`usr/lib/reel-studio/`) and next to the program in the tar.gz.
+  For a dev build: fetch it next to the binary, or set `ORT_DYLIB_PATH`.
+  Bumping ort's `api-NN` means bumping that script's version too.
 - `packaging/windows/bundle.ps1` + `reel-studio.iss`:
   - A zip, and an Inno Setup installer that installs per user into
     `%LOCALAPPDATA%\Programs\Reel Studio`: no admin rights, and a folder
@@ -213,4 +226,8 @@ Judge correctness there, not speed.
       restart into N+1 (Windows: the old exe is gone after the next launch)
 - [ ] Windows installer: Start menu entry, uninstall leaves nothing
 - [ ] Linux: the AppImage runs on a fresh install; tar.gz `INSTALL.txt`
-      steps work
+      steps work; the `.deb` installs from GNOME Software / apt and the
+      `.rpm` with dnf, the app shows in the menu, and uninstalling removes
+      it
+- [ ] Face swap: download the models, detect faces, process a clip (on
+      Linux from the AppImage and from the installed tar.gz)

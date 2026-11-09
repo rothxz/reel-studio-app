@@ -97,6 +97,16 @@ pub fn whisper() -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
 }
 
+/// The speech models downloaded on this computer (Settings → AI models):
+/// the language they're for (English label) and the file.
+pub fn downloaded_models() -> Vec<(&'static str, PathBuf)> {
+    [("Multilingual", &STOCK), ("Khmer", &KHMER)]
+        .into_iter()
+        .map(|(name, m)| (name, model_path(m)))
+        .filter(|(_, p)| p.is_file())
+        .collect()
+}
+
 fn model_path(model: &Model) -> PathBuf {
     crate::prefs::data_dir().join("models").join(model.file)
 }
@@ -249,6 +259,7 @@ fn download_model(
         if cancel.load(Ordering::Relaxed) {
             drop(file);
             let _ = std::fs::remove_file(&part);
+            crate::data_usage::record(crate::data_usage::Kind::AiModels, got);
             bail!("cancelled");
         }
         let n = reader.read(&mut buf)?;
@@ -264,6 +275,7 @@ fn download_model(
             ));
         }
     }
+    crate::data_usage::record(crate::data_usage::Kind::AiModels, got);
     file.sync_all()?;
     if total.is_some_and(|t| t != got) {
         let _ = std::fs::remove_file(&part);

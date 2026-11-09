@@ -116,6 +116,13 @@ impl Editor {
             self.toast("Add something to the timeline to export", cx);
             return;
         }
+        // A face swap that's on but not processed would export the
+        // original face: show it instead.
+        if let Some(clip) = crate::export::unprocessed_face_swaps(&self.project).first() {
+            self.select_clip_for_face_swap(clip.clone(), cx);
+            self.toast("Process the face swap before exporting", cx);
+            return;
+        }
         self.pause();
         cx.notify();
         let home = crate::prefs::home_dir();

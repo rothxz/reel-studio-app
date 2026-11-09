@@ -59,6 +59,25 @@ const VISUAL_CLIP: Tab = Tab {
         },
     ],
 };
+// Video clips also get Face Swap (it follows a person through frames).
+const VISUAL_VIDEO: Tab = Tab {
+    label: "Visual",
+    entries: &[
+        e("basic", "Basic"),
+        e("rotate", "Rotate"),
+        e("removeBg", "Remove BG"),
+        e("faceSwap", "Face Swap"),
+        e("mask", "Mask"),
+        Entry {
+            overlay: true,
+            ..e("splice", "Splice")
+        },
+        Entry {
+            main_lane: true,
+            ..e("background", "Background")
+        },
+    ],
+};
 const VISUAL_BASIC: Tab = Tab {
     label: "Visual",
     entries: &[e("basic", "Basic")],
@@ -73,7 +92,7 @@ const ADJUST_CLIP: Tab = Tab {
 };
 
 const VIDEO_TABS: &[Tab] = &[
-    VISUAL_CLIP,
+    VISUAL_VIDEO,
     Tab {
         label: "Audio",
         entries: &[e("volume", "Volume")],
@@ -322,42 +341,81 @@ impl Editor {
             .filter(|_| !layers)
             .find(|(_, es)| es.iter().any(|e| Some(e.key) == current));
 
+        // Tabs like a browser's: a darker strip, the open tab raised in the
+        // panel's own fill with rounded top corners, its bottom corners
+        // flaring out (concave) so it runs into the body below. The flare
+        // is about the top corner's size, so each side reads as one S
+        // curve; a tab under the pointer lights an inset pill instead.
+        const TOP: f32 = 12.;
+        const FOOT: f32 = 10.;
+        let strip = theme::app_bg();
+        let foot = |left: bool| {
+            let cut = div().size_full().bg(strip);
+            div()
+                .absolute()
+                .bottom_0()
+                .size(px(FOOT))
+                .bg(theme::sheet())
+                .when(left, |d| d.left(px(-FOOT)))
+                .when(!left, |d| d.right(px(-FOOT)))
+                .child(if left {
+                    cut.rounded_br(px(FOOT))
+                } else {
+                    cut.rounded_bl(px(FOOT))
+                })
+        };
         let tab_row = div()
             .flex_none()
-            .h(px(34.))
+            .h(px(40.))
+            .pt(px(6.))
             .px(px(12.))
             .flex()
-            .gap(px(16.))
-            .border_b_1()
-            .border_color(theme::card_border())
+            .items_end()
+            .gap(px(6.))
+            .bg(strip)
             .children(tabs.iter().enumerate().map(|(i, (tab, entries))| {
                 let on = current_tab.is_some_and(|(t, _)| std::ptr::eq(*t, *tab));
                 let first = entries[0].key;
-                div()
-                    .id(("inspector-tab", i))
-                    .h_full()
+                let group = SharedString::from(format!("inspector-tab-{i}"));
+                let label = div()
+                    .h(px(26.))
+                    .px(px(8.))
                     .flex()
                     .items_center()
-                    .border_b_2()
-                    .border_color(if on {
-                        theme::text()
-                    } else {
-                        gpui::transparent_black().into()
-                    })
+                    .rounded(px(8.))
+                    .child(crate::i18n::ts(tab.label));
+                div()
+                    .id(("inspector-tab", i))
+                    .group(group.clone())
+                    .relative()
+                    .h_full()
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .rounded_t(px(TOP))
                     .cursor_pointer()
                     .text_size(px(theme::SM))
-                    .text_color(if on {
-                        theme::text()
-                    } else {
-                        theme::text_secondary()
+                    .map(|d| {
+                        if on {
+                            d.bg(theme::sheet())
+                                .text_color(theme::text())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(foot(true))
+                                .child(foot(false))
+                                .child(label)
+                        } else {
+                            d.text_color(theme::text_secondary()).child(
+                                label.group_hover(group, |s| {
+                                    s.bg(theme::fill_subtle()).text_color(theme::text())
+                                }),
+                            )
+                        }
                     })
-                    .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .on_click(cx.listener(move |ed, _, _, cx| {
                         ed.inspector_entry = Some(first);
                         ed.layers_panel = None;
                         cx.notify();
                     }))
-                    .child(crate::i18n::ts(tab.label))
             }));
 
         let sub_tabs = current_tab
@@ -387,6 +445,7 @@ impl Editor {
             Some("basic") => self.render_basic_panel(clip, cx),
             Some("rotate") => self.render_rotate_panel(clip, main_lane, cx),
             Some("removeBg") => self.render_cutout_panel(clip, cx),
+            Some("faceSwap") => self.render_face_swap_panel(clip, cx),
             Some("mask") => self.render_mask_panel(clip, cx),
             Some("splice") => self.render_splice_panel(clip, cx),
             Some("background") => self.render_background_panel(clip, cx),

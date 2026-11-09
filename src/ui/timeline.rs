@@ -1264,6 +1264,17 @@ impl Editor {
                                     .child(mono(speed_badge(clip), theme::XXS, theme::text())),
                             )
                         })
+                        // A swapped face shows: the clip says it's AI-edited.
+                        .when(clip.active_face_swap().is_some(), |d| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .px(px(3.))
+                                    .rounded(px(3.))
+                                    .bg(rgba(0x00000080))
+                                    .child(mono("AI FACE", theme::XXS, theme::text())),
+                            )
+                        })
                         .child(
                             div()
                                 .flex_none()

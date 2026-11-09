@@ -8,12 +8,15 @@
 #   Reel-Studio-<version>-mac-<arm64|x64>.dmg        for downloading by hand
 #   Reel-Studio-<version>-linux-<x64|arm64>.AppImage runs as it is; the updater's
 #   Reel-Studio-<version>-linux-<x64|arm64>.tar.gz   to install by hand
+#   Reel-Studio-<version>-linux-<amd64|arm64>.deb    Debian / Ubuntu package
+#   Reel-Studio-<version>-linux-<x86_64|aarch64>.rpm Fedora / openSUSE package
 #   Reel-Studio-<version>-windows-x64.zip            portable; the updater's
 #   Reel-Studio-<version>-windows-x64-setup.exe      the installer
 #   update.json                                      version + per-platform url / SHA-256 / size
 #
 # plus the hand downloads again under names without the version
-# (Reel-Studio-mac-arm64.dmg, …-windows-x64-setup.exe, …-linux-x64.AppImage),
+# (Reel-Studio-mac-arm64.dmg, …-windows-x64-setup.exe, …-linux-x64.AppImage,
+# …-linux-amd64.deb, …-linux-x86_64.rpm),
 # so the README links `releases/latest/download/<name>` always fetch the
 # newest. Each release is marked "Latest" (set PRERELEASE below to hold a
 # release back as a pre-release instead).
@@ -372,7 +375,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential nasm pkg-config clang zlib1g-dev libbz2-dev \
             libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-xcb-dev libxcb1-dev libfontconfig-dev file
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev file rpm
 
       - name: Cache FFmpeg
         id: ffmpeg
@@ -419,12 +422,29 @@ jobs:
           packaging/linux/bundle.sh target/release/reel-studio-gpui \
             "$VERSION" "${{ matrix.arch }}" dist
 
+      # The packages install where people will: the .deb here (the oldest
+      # Ubuntu supported: its Depends resolve), the .rpm on Fedora. Each
+      # time, every library the program and ONNX Runtime need is found.
+      - name: Install the .deb and .rpm
+        run: |
+          check='for f in /usr/bin/reel-studio /usr/lib/reel-studio/libonnxruntime.so.1; do
+                   if ldd "$f" | grep "not found"; then echo "$f: missing libraries" >&2; exit 1; fi
+                 done
+                 grep -q "^Exec=reel-studio" /usr/share/applications/reel-studio.desktop'
+          sudo apt-get install -y --no-install-recommends ./dist/*.deb
+          sudo sh -c "$check"
+          sudo apt-get remove -y reel-studio
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:41 \
+            sh -c "dnf install -y --setopt=install_weak_deps=False /dist/*.rpm && $check"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
             dist/*.AppImage
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
           retention-days: 7
 
@@ -637,11 +657,11 @@ jobs:
       - name: Publish ${{ env.TAG }}
         run: |
           # The README's download links: the same files without the version.
-          for f in out/*.dmg out/*-setup.exe out/*.AppImage; do
+          for f in out/*.dmg out/*-setup.exe out/*.AppImage out/*.deb out/*.rpm; do
             cp "$f" "out/$(basename "$f" | sed "s/^Reel-Studio-$VERSION-/Reel-Studio-/")"
           done
           ls -la out
-          files=(out/*.zip out/*.dmg out/*.AppImage out/*.tar.gz out/*-setup.exe)
+          files=(out/*.zip out/*.dmg out/*.AppImage out/*.tar.gz out/*.deb out/*.rpm out/*-setup.exe)
           if gh release view "$TAG" > /dev/null 2>&1; then
             # A re-run keeps its run number, so the release already exists.
             gh release upload "$TAG" "${files[@]}" --clobber

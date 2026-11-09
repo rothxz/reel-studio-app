@@ -216,6 +216,21 @@ impl Worker {
 
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
 
+/// Where the voice is set up (its environment and model): Settings → AI
+/// models measures and deletes it.
+pub fn setup_dir() -> PathBuf {
+    dir()
+}
+
+/// Stops the worker, if it runs (its files are about to be deleted).
+pub fn stop() {
+    let worker = WORKER.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(mut w) = worker {
+        let _ = w.child.kill();
+        let _ = w.child.wait();
+    }
+}
+
 /// What to say, and how.
 pub struct Line<'a> {
     pub text: &'a str,

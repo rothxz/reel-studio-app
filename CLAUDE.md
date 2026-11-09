@@ -86,6 +86,9 @@ src/clip_edits.rs the toolbar's one-shot clip edits on the document:
 src/crop.rs        crop math (box, handles, ratio fit, straighten cover)
 src/projects.rs    projects folder: list / load / save (atomic) / delete
 src/prefs.rs       panel sizes + timeline switches, data folder
+src/storage.rs     what the data folder holds by category (Settings → Data
+                   and Storage): measure, clear the cache, launch trim
+src/data_usage.rs  bytes the app's features downloaded, per kind
 src/engine.rs      Engine: C++ core via FFI (feature cpp-engine) or Rust stand-in
 src/decoder.rs     FFmpeg probe, thumbnails, one decode thread per source,
                    filmstrip tile thread, waveform peaks
@@ -118,6 +121,20 @@ src/agent/         the AI agent: providers, keys (keychain), llm (Ollama /
                    captions (timed to the voice's pauses), graphics
                    (motion-graphic scenes drawn with tiny-skia), movie
                    (frames → H.264 MP4), eval (real-model scoring)
+src/face_swap/     AI face swap on this computer: model registry (pinned
+                   URLs, SHA-256, licences, download), ONNX Runtime
+                   sessions (`ort`; Core ML / DirectML / CUDA, CPU
+                   fallback), runtime (ONNX Runtime linked in on macOS /
+                   Windows, loaded on Linux from the library the release
+                   ships), detector (YuNet), five-point align,
+                   embedder (ArcFace), swapper trait (inswapper 128),
+                   restorer (GFPGAN), mask / colour match / paste,
+                   tracker (identity checks, One-Euro landmarks), the
+                   clip job (reader thread → bounded queue), the result
+                   cache (per-frame crop + transform) pasted by the
+                   player (`Editor::face_swap_frames`) and export;
+                   models in <data>/models/face-swap (`REEL_FACE_MODELS`
+                   overrides), end-to-end tests in `tests.rs` (ignored)
 src/effects/       video effects + filters in the preview: shader packages
                    (download, hash check, cache), the passes at a time
                    (stack), Metal source (msl: the effect dialect →
@@ -136,7 +153,9 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    crop (the Crop dialog), layers (Arrange layers),
                    timeline (lane layout + drawing), timeline_edit (clip
                    drag / trim / snapping, drops, wheel, right-click menus),
-                   dialogs (popup, confirm, shortcuts), export (save
+                   dialogs (popup, confirm, shortcuts), face_swap
+                   (Visual › Face Swap), settings +
+                   storage (its Data and Storage pages), export (save
                    dialog + the export screen), agent (the AI
                    agent panel + its turn loop), widgets,
                    icons (icon fonts served as SVG)

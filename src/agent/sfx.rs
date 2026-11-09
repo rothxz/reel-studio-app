@@ -332,6 +332,7 @@ pub fn download(hit: &SoundHit) -> Result<PathBuf> {
         .with_config()
         .limit(40 << 20)
         .read_to_vec()?;
+    crate::data_usage::record(crate::data_usage::Kind::Sounds, bytes.len() as u64);
     std::fs::create_dir_all(data_dir())?;
     let tmp = path.with_extension("part");
     std::fs::write(&tmp, &bytes)?;

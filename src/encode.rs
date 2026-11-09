@@ -47,6 +47,9 @@ pub struct VideoOptions {
     pub input: PixelOrder,
     /// With an AAC stereo track at `AUDIO_RATE`.
     pub audio: bool,
+    /// The file's `comment` tag (what the video is, e.g. that it was
+    /// edited with AI).
+    pub comment: Option<String>,
 }
 
 struct AudioTrack {
@@ -240,6 +243,11 @@ impl Mp4Writer {
             None
         };
 
+        if let Some(c) = &opts.comment {
+            let mut tags = Dictionary::new();
+            tags.set("comment", c);
+            octx.set_metadata(tags);
+        }
         // The index at the front, so players start before it's all read.
         let mut header = Dictionary::new();
         header.set("movflags", "+faststart");
@@ -433,6 +441,7 @@ mod tests {
                 bitrate: 500_000,
                 input: PixelOrder::Bgra,
                 audio: true,
+                comment: Some("made by a test".into()),
             },
         )
         .unwrap();
@@ -456,6 +465,7 @@ mod tests {
         assert!((secs - 2.).abs() < 0.15, "{secs}");
         assert!(input.streams().best(ff::media::Type::Video).is_some());
         assert!(input.streams().best(ff::media::Type::Audio).is_some());
+        assert_eq!(input.metadata().get("comment"), Some("made by a test"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

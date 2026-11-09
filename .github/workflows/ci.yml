@@ -108,6 +108,16 @@ jobs:
       - run: cargo clippy --locked --all-targets
       - run: cargo test --locked
 
+      # Face swap loads ONNX Runtime at run time on Linux: the build the
+      # release ships starts on this glibc and runs a model.
+      - name: ONNX Runtime loads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          packaging/linux/fetch-onnxruntime.sh x64 "$RUNNER_TEMP/onnxruntime"
+          ORT_DYLIB_PATH="$RUNNER_TEMP/onnxruntime/libonnxruntime.so.1" \
+            cargo test --locked runtime_runs_a_model -- --ignored
+
   windows:
     name: Windows · clippy · test
     runs-on: windows-2022
