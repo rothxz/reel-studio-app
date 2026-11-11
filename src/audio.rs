@@ -403,6 +403,32 @@ pub fn read_mono(path: &str, from: Micros, to: Micros, rate: u32) -> Result<Vec<
     Ok(out)
 }
 
+/// All of `path`'s sound from its start (up to `max`) as stereo blocks at
+/// `rate`, handed to `f` as they decode (memory stays flat for a long
+/// song). Returns how much was read.
+pub fn stream_stereo(
+    path: &str,
+    rate: u32,
+    max: Micros,
+    mut f: impl FnMut(&[[f32; 2]]),
+) -> Result<Micros> {
+    const BLOCK: usize = 1024;
+    let mut s = Stream::open(path)?;
+    let rate = rate.max(1);
+    let step = s.rate as f64 / rate as f64;
+    let limit = (max.max(0) as f64 * rate as f64 / SECOND as f64) as u64;
+    let mut chunk = vec![[0f32; 2]; BLOCK];
+    let mut frames: u64 = 0;
+    while frames < limit && !s.ended() {
+        // Past the end `read` pads with silence: a block at most.
+        let take = (limit - frames).min(BLOCK as u64) as usize;
+        s.read(&mut chunk[..take], step);
+        f(&chunk[..take]);
+        frames += take as u64;
+    }
+    Ok((frames as u128 * SECOND as u128 / rate as u128) as Micros)
+}
+
 /// A decoded frame as stereo f32 (mono doubled, more channels: the first
 /// two).
 fn to_stereo(frame: &ff::frame::Audio) -> Vec<[f32; 2]> {

@@ -4,10 +4,12 @@
 // REEL_ENGINE_DIR points at modules/video-engine/cpp of the main repo.
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
 
+#include "videoengine/AudioAnalysis.h"
 #include "videoengine/EffectGraph.h"
 #include "videoengine/Effects.h"
 #include "videoengine/Engine.h"
@@ -148,5 +150,40 @@ int32_t reel_adjust_color_matrix(const double* values, double* out) {
     if (values[i] != 0.0) return 1;
   return 0;
 }
+
+// ---- beat analysis -------------------------------------------------------------
+// The engine's streaming beat analyzer: Rust decodes the song (FFmpeg) and
+// feeds its PCM in chunks; finish returns the result in the engine's JSON
+// wire format (BeatAnalysisToJson), which the caller frees with
+// reel_string_free.
+
+struct ReelBeats {
+  AudioBeatAnalyzer analyzer;
+  explicit ReelBeats(int rate) : analyzer(rate) {}
+};
+
+ReelBeats* reel_beats_new(int32_t sample_rate) { return new ReelBeats(sample_rate > 0 ? sample_rate : 44100); }
+
+void reel_beats_process(ReelBeats* b, const float* interleaved, size_t frames, int32_t channels) {
+  if (!b || !interleaved || frames == 0 || channels <= 0) return;
+  b->analyzer.Process(interleaved, frames, channels);
+}
+
+// Consumes `b`.
+char* reel_beats_finish(ReelBeats* b, int64_t duration_micros) {
+  if (!b) return nullptr;
+  const std::string json = BeatAnalysisToJson(b->analyzer.Finish(duration_micros));
+  delete b;
+  char* out = static_cast<char*>(std::malloc(json.size() + 1));
+  if (out) std::memcpy(out, json.c_str(), json.size() + 1);
+  return out;
+}
+
+void reel_beats_free(ReelBeats* b) { delete b; }
+
+// The analyzer's version (results from another one are re-analyzed).
+int32_t reel_beats_version(void) { return kBeatAnalyzerVersion; }
+
+void reel_string_free(char* s) { std::free(s); }
 
 }  // extern "C"

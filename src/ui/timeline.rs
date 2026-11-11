@@ -1231,7 +1231,8 @@ impl Editor {
                 if let Some(wave) = self.waveform(clip, g.w, shift, lanes) {
                     content = content.child(wave);
                 }
-                if let Some(dots) = beat_dots(clip, shift, self.pps, lanes) {
+                let lit = self.beat_under_playhead(clip);
+                if let Some(dots) = beat_dots(clip, shift, self.pps, lanes, lit) {
                     content = content.child(dots);
                 }
             }
@@ -1832,12 +1833,15 @@ impl Editor {
 }
 
 /// An audio clip's beat markers as dots along its bottom edge, bigger for
-/// stronger beats (monochrome, like the rest of the editor).
+/// stronger beats (monochrome, like the rest of the editor). `lit`: the
+/// selected clip's beat under the playhead (what Delete beat removes),
+/// drawn bigger in red.
 fn beat_dots(
     clip: &Clip,
     shift: f32,
     pps: f32,
     lanes: Option<Bounds<Pixels>>,
+    lit: Option<Micros>,
 ) -> Option<impl IntoElement + use<>> {
     let beats = clip.beats();
     if beats.is_empty() {
@@ -1856,6 +1860,7 @@ fn beat_dots(
                 for &(t, strength) in &beats {
                     let x = left + (t - start) as f32 / SECOND as f32 * pps;
                     let (r, color) = match strength {
+                        _ if Some(t) == lit => (3.5, theme::danger()),
                         BeatStrength::Weak => (1.6, rgba(0xffffffbf)),
                         BeatStrength::Medium => (2.3, rgba(0xffffffff)),
                         BeatStrength::Strong => (3., rgba(0xffffffff)),

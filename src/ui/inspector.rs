@@ -451,6 +451,8 @@ impl Editor {
             Some("background") => self.render_background_panel(clip, cx),
             Some("effects") => self.render_effect_settings(cx),
             Some("volume") => self.render_volume_panel(clip, cx),
+            Some("beats") => self.render_beats_panel(clip, cx),
+            Some("audioDuration") => self.render_audio_duration_panel(clip, cx),
             Some("text:basic") => self.render_text_panel(clip, cx),
             Some("captionEdit") => self.render_caption_edit(clip, cx),
             Some(key) => {

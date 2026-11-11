@@ -86,11 +86,18 @@ jobs:
       # run on a GPU-less runner.
       - name: System packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential nasm pkg-config clang zlib1g-dev libbz2-dev \
-            libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-xcb-dev libxcb1-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers
+          # The runner's package mirror sometimes drops out (DNS failures
+          # for minutes): retry each download, then the whole step.
+          for attempt in 1 2 3; do
+            sudo apt-get update -o Acquire::Retries=3 &&
+            sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+              build-essential nasm pkg-config clang zlib1g-dev libbz2-dev \
+              libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+              libx11-xcb-dev libxcb1-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers &&
+            break
+            [ "$attempt" = 3 ] && exit 1
+            echo "apt failed (attempt $attempt), retrying in 60 s"; sleep 60
+          done
 
       - name: Cache FFmpeg
         id: ffmpeg

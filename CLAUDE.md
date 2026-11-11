@@ -104,6 +104,10 @@ src/text_render.rs text clips drawn as pictures (cosmic-text + tiny-skia)
 src/audio.rs       sound out (cpal): timeline mixer in step with the
                    engine (`TimelineMix`, also run offline by export),
                    library previews
+src/beats/         an audio clip's beat map (`clip.beats`, the app's JSON:
+                   source-time markers, cached analysis, modes, edits),
+                   analysis (FFmpeg decode → the engine's analyzer via the
+                   shim; `standin.rs` without the engine)
 src/encode.rs      MP4 writer: H.264 (VideoToolbox / Media Foundation /
                    x264 / openh264, MPEG-4 last) + AAC (export, agent)
 src/export.rs      export thread: frame-exact layers → GPU compositor →
@@ -147,7 +151,8 @@ src/ui/            one file per panel, each `impl Editor { fn render_… }`:
                    header, home, browser, fx (effect / filter grids, the
                    effect clip's settings, Adjust sliders, their edits),
                    library (Audio / Text / Sticker views), text_input (the
-                   text field), text_panel, audio_panel,
+                   text field), text_panel, audio_panel, beats (Audio ›
+                   Beats), audio_duration (Audio › Duration),
                    player, inspector, toolbar, clip_tools (the
                    toolbar's Replace / Freeze / Extract audio / Overlay),
                    crop (the Crop dialog), layers (Arrange layers),

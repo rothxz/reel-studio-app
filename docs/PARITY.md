@@ -303,8 +303,7 @@ isn't listed.
 - [x] Clip selected: the tab row and sub-tab pills per kind from one
   table (`ui/inspector.rs`), the open sub-tab kept across clips that have
   it, else the clip's first. *Placeholders left: Animation (clip,
-  text, drawing), Text's Templates / Fonts / Effects / Bubbles, Audio's
-  Beats / Duration.*
+  text, drawing), Text's Templates / Fonts / Effects / Bubbles.*
 - [~] Tabbed inspector per kind (`inspectorTabs.ts`). *Tabs done; panels:*
   - [~] Video: Visual ✓ · Audio (Volume) · Speed (Normal ✓, Curve ✓) ·
     Animation · Adjust ✓. *Speed › Normal: log slider 0.1–100× snapping to
@@ -396,8 +395,30 @@ isn't listed.
   - [~] Audio (and a video's Audio tab): Volume › Volume — slider with
     100 % at its middle (to 1000 %), read-out, mute, reset (setting a
     level unmutes) — and Fade in / Fade out (0.1 s steps, each side at most
-    10 s and never over the other). *Beats and Duration aren't ported;
-    no keyframed volume.*
+    10 s and never over the other). *No keyframed volume.*
+  - [x] Audio › Beats (`ui/beats.rs`, `src/beats/`): status (`{bpm} BPM ·
+    {count} beats` / Analyzing… / No reliable beats detected), Auto
+    generate (the engine's `AudioBeatAnalyzer` through the shim, fed by
+    our FFmpeg decode off the UI thread; one analysis per song per
+    session, so a split or copy gets its beats at once; a map from another
+    analyzer version re-analyzes), Detection Strong / Normal / Dense
+    (from the cached `detected`, never re-decoded; picked before analysis
+    too), Add / Delete beat at the playhead, Move nearest beat here (half a
+    beat's reach), Reset beats, Clear beat markers. Same `beats` JSON as
+    the app (source time; moved automatic beats are `override`s with
+    `originalTime`). *Beyond the old sheet:* ‹ › step between beats (⌥← /
+    ⌥→), M = add / delete beat (selected music clip, else the one under
+    the playhead; in the menus and Shortcuts), Shift all beats a frame
+    earlier / later, and the beat under the playhead lit red on the
+    selected clip. Without the engine, a small Rust stand-in
+    (`beats/standin.rs`) gives the same result format.
+  - [x] Audio › Duration (`ui/audio_duration.rs`): slider 0.5 s → what's
+    left of the song (library length, else its waveform, else its
+    analysis), read-out follows the drag and lands on release (one undo
+    step), from the end (start stays). Fit to video, Full song. *Beyond
+    the old sheet:* Ends at (timecode) and Song left read-outs; with auto
+    snapping on the slider catches the song's beats and the video's end;
+    End on a beat; fades that no longer fit shrink with the clip.
   - [x] Effect: Effects › Adjust only, no second grid (looks are picked
     in the browser): the effect's preview + name with Replace (opens the
     browser's Video effects, where a pick replaces it), then Reset + its
@@ -548,8 +569,8 @@ isn't listed.
   timeline through its window and speed) along the bottom edge, 1.6 /
   2.3 / 3 px for weak / medium / strong. White, not the old app's yellow
   accent (the editor stays monochrome). Moved clip edges and keyframe
-  diamonds snap to the beats (a clip not to its own). *Editing beats is
-  the Audio › Beats panel, not ported.*
+  diamonds snap to the beats (a clip not to its own). The selected
+  clip's beat under the playhead is drawn red (what Delete beat removes).
 - [x] Keyframe diamonds on the selected clip: one ◆ per keyframe time
   (enabled property tracks, 50 ms merged, thinned to one per 12 px), on
   the clip's middle; the one under the playhead red. Click = playhead onto
@@ -688,8 +709,7 @@ items, tooltips and the dialog.
 2. Timeline leftovers: the cover editor; group move of a multi-selection;
    Graphs badge and tracked-path diamonds.
 3. Inspector panels on the real document fields: Adjust; Text's
-   Templates / Fonts / Effects / Bubbles / Animation; Audio's Beats and
-   Duration.
+   Templates / Fonts / Effects / Bubbles / Animation.
 4. Browser: Voiceover, Text templates; Transitions search; bundle
    whisper.cpp for auto captions (no Homebrew), Edit captions.
 5. Export leftovers (see Export): H.264 on Linux, custom bitrate.
