@@ -94,6 +94,68 @@ mod imp {
             local: i64,
             out: *mut f64,
         ) -> i32;
+        fn reel_beats_new(sample_rate: i32) -> *mut RawBeats;
+        fn reel_beats_process(
+            b: *mut RawBeats,
+            interleaved: *const f32,
+            frames: usize,
+            channels: i32,
+        );
+        fn reel_beats_finish(b: *mut RawBeats, duration_micros: i64) -> *mut c_char;
+        fn reel_beats_free(b: *mut RawBeats);
+        fn reel_string_free(s: *mut c_char);
+        fn reel_beats_version() -> i32;
+    }
+
+    #[repr(C)]
+    struct RawBeats {
+        _private: [u8; 0],
+    }
+
+    /// The engine's streaming beat analyzer (`AudioBeatAnalyzer`): PCM in
+    /// chunks, then the result in its JSON wire format.
+    pub struct BeatAnalyzer(*mut RawBeats);
+
+    // The analyzer is plain data owned by this handle.
+    unsafe impl Send for BeatAnalyzer {}
+
+    impl BeatAnalyzer {
+        /// The `analysisVersion` its results carry.
+        pub fn version() -> String {
+            unsafe { reel_beats_version() }.to_string()
+        }
+
+        pub fn new(sample_rate: u32) -> Self {
+            BeatAnalyzer(unsafe { reel_beats_new(sample_rate as i32) })
+        }
+
+        /// Interleaved samples, `channels` per frame.
+        pub fn process(&mut self, interleaved: &[f32], channels: usize) {
+            let channels = channels.max(1);
+            let frames = interleaved.len() / channels;
+            unsafe { reel_beats_process(self.0, interleaved.as_ptr(), frames, channels as i32) }
+        }
+
+        pub fn finish(mut self, duration: Micros) -> String {
+            let raw = std::mem::replace(&mut self.0, std::ptr::null_mut());
+            let json = unsafe { reel_beats_finish(raw, duration) };
+            if json.is_null() {
+                return String::new();
+            }
+            let out = unsafe { CStr::from_ptr(json) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { reel_string_free(json) };
+            out
+        }
+    }
+
+    impl Drop for BeatAnalyzer {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { reel_beats_free(self.0) }
+            }
+        }
     }
 
     /// A Classic filter's colour matrix at `intensity` (0–100), from the
@@ -232,6 +294,10 @@ mod imp {
         None
     }
 
+    /// Without the engine, beats come from our own small analyzer
+    /// (`beats::standin`), same wire format.
+    pub use crate::beats::standin::Analyzer as BeatAnalyzer;
+
     /// Likewise the Adjust matrix: the stand-in shows the clip unadjusted.
     pub fn adjust_color_matrix(_values: &[f64; 7]) -> Option<[f32; 20]> {
         None
@@ -320,7 +386,7 @@ mod imp {
     }
 }
 
-pub use imp::{Engine, adjust_color_matrix, filter_color_matrix};
+pub use imp::{BeatAnalyzer, Engine, adjust_color_matrix, filter_color_matrix};
 
 /// A clip's property at clip-local `local`: its keyframes as the engine
 /// eases them, else the clip's own value.

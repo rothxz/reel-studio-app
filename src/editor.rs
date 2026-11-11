@@ -427,6 +427,8 @@ pub struct Editor {
     pub(crate) tile_server: TileServer,
     /// Waveform peaks by file (None while decoding, or when it has no sound).
     pub(crate) waves: HashMap<String, Option<Arc<Waveform>>>,
+    /// Beat analyses done and running (Audio › Beats).
+    pub(crate) beat_jobs: crate::ui::beats::BeatJobs,
 
     servers: HashMap<String, FrameServer>,
     frame_tx: async_channel::Sender<DecodedFrame>,
@@ -627,6 +629,7 @@ impl Editor {
             tiles_pending: HashSet::new(),
             tile_server: TileServer::spawn(TILE_MAX_WIDTH, tile_tx),
             waves: HashMap::new(),
+            beat_jobs: Default::default(),
             servers: HashMap::new(),
             frame_tx,
             wanted: vec![],
@@ -1378,6 +1381,9 @@ impl Editor {
             Shortcut::Forward1s => self.seek_by(SECOND, cx),
             Shortcut::PrevEdit => self.jump_to_edit_point(-1, cx),
             Shortcut::NextEdit => self.jump_to_edit_point(1, cx),
+            Shortcut::PrevBeat => self.step_beat(-1, cx),
+            Shortcut::NextBeat => self.step_beat(1, cx),
+            Shortcut::AddBeat => self.toggle_beat_at_playhead(cx),
             Shortcut::GoStart => {
                 self.pause();
                 self.seek(0, cx)
@@ -2767,12 +2773,15 @@ impl Render for Editor {
             Forward1s,
             PrevEdit,
             NextEdit,
+            PrevBeat,
+            NextBeat,
             GoStart,
             GoEnd,
             SplitClip,
             DeleteLeft,
             DeleteRight,
             Deactivate,
+            AddBeat,
             DeleteClip,
             Duplicate,
             CopyClip,

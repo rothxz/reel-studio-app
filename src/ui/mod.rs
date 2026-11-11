@@ -3,7 +3,9 @@
 
 pub mod adjust_panel;
 pub mod agent;
+pub mod audio_duration;
 pub mod audio_panel;
+pub mod beats;
 pub mod browser;
 pub mod caption_edit;
 pub mod captions;

@@ -75,7 +75,7 @@ impl Editor {
     /// A slider with its own scale: `to_value` maps 0–1 to the value,
     /// `text` shows it; `commit` gets it on release.
     #[allow(clippy::too_many_arguments)]
-    fn scaled_slider(
+    pub(crate) fn scaled_slider(
         &self,
         key: &'static str,
         label: &str,
