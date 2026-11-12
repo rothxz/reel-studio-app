@@ -6,7 +6,7 @@
 //! forward a little (playback) decodes on from where it is; anything else
 //! seeks to the keyframe before the target and decodes up to it.
 
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 
 use ff::format::Pixel;
@@ -175,26 +175,37 @@ struct Decoder {
     scaler: Option<(scaling::Context, Pixel, u32, u32)>,
     rotation: u32,
     max_width: u32,
+    /// `max_width` caps the longer side, not just the width (filmstrip
+    /// tiles: a portrait video's tile needn't be taller than wide).
+    long_side: bool,
     eof: bool,
     /// Frames still allowed to be skipped as corrupt since the last seek.
     skip_corrupt: u8,
 }
 
+/// Decode threads for the live preview: a few cores keep 4K smooth, and
+/// each frame thread holds its own copy of the reference frames.
+const PREVIEW_THREADS: usize = 4;
+
+/// Every core (batch work: export, face swap).
+fn all_cores() -> usize {
+    thread::available_parallelism().map_or(1, |n| n.get())
+}
+
 impl Decoder {
-    fn open(path: &str, max_width: u32) -> anyhow::Result<Self> {
+    /// `threads`: FFmpeg frame threads (1 for small pictures; each thread
+    /// costs memory and a frame of latency).
+    fn open(path: &str, max_width: u32, threads: usize) -> anyhow::Result<Self> {
         let input = ff::format::input(path)?;
         let stream = input
             .streams()
             .best(ff::media::Type::Video)
             .ok_or_else(|| anyhow::anyhow!("no video stream"))?;
         let mut ctx = ff::codec::Context::from_parameters(stream.parameters())?;
-        // Let FFmpeg use every core for software decode.
-        if let Ok(threads) = thread::available_parallelism() {
-            ctx.set_threading(ff::threading::Config {
-                kind: ff::threading::Type::Frame,
-                count: threads.get(),
-            });
-        }
+        ctx.set_threading(ff::threading::Config {
+            kind: ff::threading::Type::Frame,
+            count: threads.max(1),
+        });
         let video = ctx.decoder().video()?;
         let tb = stream.time_base();
         let rate = stream.avg_frame_rate();
@@ -212,6 +223,7 @@ impl Decoder {
             video,
             scaler: None,
             max_width,
+            long_side: false,
             eof: false,
             skip_corrupt: 0,
         })
@@ -266,8 +278,13 @@ impl Decoder {
 
     fn frame_bgra(&mut self, frame: &ff::frame::Video) -> anyhow::Result<(u32, u32, Vec<u8>)> {
         let (w, h, fmt) = (frame.width(), frame.height(), frame.format());
-        let dw = w.min(self.max_width).max(2) & !1;
-        let dh = ((h as u64 * dw as u64 / w as u64) as u32).max(2) & !1;
+        let (dw, dh) = if self.long_side && h > w {
+            let dh = h.min(self.max_width).max(2) & !1;
+            (((w as u64 * dh as u64 / h as u64) as u32).max(2) & !1, dh)
+        } else {
+            let dw = w.min(self.max_width).max(2) & !1;
+            (dw, ((h as u64 * dw as u64 / w as u64) as u32).max(2) & !1)
+        };
         let stale =
             !matches!(&self.scaler, Some((_, f, sw, sh)) if *f == fmt && *sw == w && *sh == h);
         if stale {
@@ -327,8 +344,18 @@ impl FrameReader {
     /// `max_width` caps the decoded width (aspect kept); `key` names the
     /// frames it hands out.
     pub fn open(source: &str, key: &str, max_width: u32) -> anyhow::Result<Self> {
+        Self::open_threads(source, key, max_width, all_cores())
+    }
+
+    /// `open` with at most `threads` decode threads.
+    pub fn open_threads(
+        source: &str,
+        key: &str,
+        max_width: u32,
+        threads: usize,
+    ) -> anyhow::Result<Self> {
         Ok(FrameReader {
-            dec: Decoder::open(source, max_width)?,
+            dec: Decoder::open(source, max_width, threads.min(all_cores()))?,
             source: source.to_string(),
             key: key.to_string(),
             shown: None,
@@ -396,7 +423,7 @@ fn serve(
     rx: mpsc::Receiver<Micros>,
     out: async_channel::Sender<DecodedFrame>,
 ) -> anyhow::Result<()> {
-    let mut reader = FrameReader::open(source, key, max_width)?;
+    let mut reader = FrameReader::open_threads(source, key, max_width, PREVIEW_THREADS)?;
     let mut sent: Option<Arc<DecodedFrame>> = None;
     while let Ok(mut target) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
@@ -427,7 +454,7 @@ fn serve(
 /// One small frame of `path` near `at` (a media tile's picture). Blocking:
 /// call it off the UI thread.
 pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<DecodedFrame> {
-    let mut dec = Decoder::open(path, max_width)?;
+    let mut dec = Decoder::open(path, max_width, 1)?;
     if at > 0 {
         dec.seek(at)?;
     }
@@ -458,7 +485,7 @@ pub fn thumbnail(path: &str, at: Micros, max_width: u32) -> anyhow::Result<Decod
 pub fn scene_cuts(path: &str, from: Micros, to: Micros) -> anyhow::Result<Vec<Micros>> {
     const STEP: Micros = 66_000;
     const MIN_GAP: Micros = 600_000;
-    let mut dec = Decoder::open(path, 64)?;
+    let mut dec = Decoder::open(path, 64, 1)?;
     if from > 0 {
         dec.seek(from)?;
     }
@@ -543,25 +570,53 @@ mod scene_tests {
 /// Decoders the tile thread keeps open (one per recently used file).
 const TILE_DECODERS: usize = 4;
 
+/// The tiles the timeline shows and lacks (latest wins), and whether the
+/// server was dropped.
+#[derive(Default)]
+struct TileQueue {
+    /// Per file in time order, so neighbouring tiles decode on, not seek.
+    wanted: std::collections::VecDeque<(String, Micros)>,
+    quit: bool,
+}
+
+type TileSlot = Arc<(Mutex<TileQueue>, Condvar)>;
+
 /// Filmstrip pictures for the timeline: one thread, a few files open at
-/// once. A request is answered with a `DecodedFrame` whose `pts` is the
-/// requested time (the caller's cache key), not the frame's own.
+/// once. A tile is answered with a `DecodedFrame` whose `pts` is the
+/// requested time (the caller's cache key), not the frame's own. Each
+/// `want` replaces the last: a zoom or scroll that outruns the decoder
+/// only decodes the tiles it ends on.
 pub struct TileServer {
-    requests: mpsc::Sender<(String, Micros)>,
+    queue: TileSlot,
 }
 
 impl TileServer {
-    pub fn spawn(max_width: u32, out: async_channel::Sender<DecodedFrame>) -> Self {
-        let (tx, rx) = mpsc::channel();
+    /// `max_side`: a tile's longer side at most (px).
+    pub fn spawn(max_side: u32, out: async_channel::Sender<DecodedFrame>) -> Self {
+        let queue: TileSlot = Arc::default();
+        let jobs = queue.clone();
         thread::Builder::new()
             .name("filmstrip".into())
-            .spawn(move || serve_tiles(max_width, rx, out))
+            .spawn(move || serve_tiles(max_side, jobs, out))
             .expect("filmstrip thread starts");
-        TileServer { requests: tx }
+        TileServer { queue }
     }
 
-    pub fn request(&self, source: &str, at: Micros) {
-        let _ = self.requests.send((source.to_string(), at));
+    /// The tiles to decode now, instead of any still waiting.
+    pub fn want(&self, mut tiles: Vec<(String, Micros)>) {
+        tiles.sort();
+        tiles.dedup();
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap().wanted = tiles.into();
+        ready.notify_one();
+    }
+}
+
+impl Drop for TileServer {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap().quit = true;
+        ready.notify_one();
     }
 }
 
@@ -585,60 +640,63 @@ impl Decoder {
     }
 }
 
-fn serve_tiles(
-    max_width: u32,
-    rx: mpsc::Receiver<(String, Micros)>,
-    out: async_channel::Sender<DecodedFrame>,
-) {
+fn serve_tiles(max_side: u32, queue: TileSlot, out: async_channel::Sender<DecodedFrame>) {
     // Most recently used last; the last frame each one decoded.
     let mut open: Vec<(String, Decoder, Option<Micros>)> = vec![];
     let mut failed: std::collections::HashSet<String> = Default::default();
-    while let Ok(first) = rx.recv() {
-        let mut batch = vec![first];
-        batch.extend(rx.try_iter());
-        // Per file in time order, so neighbouring tiles decode on, not seek.
-        batch.sort();
-        batch.dedup();
-        for (source, at) in batch {
-            if failed.contains(&source) {
-                continue;
+    loop {
+        let (source, at) = {
+            let (lock, ready) = &*queue;
+            let mut q = lock.lock().unwrap();
+            loop {
+                if q.quit {
+                    return;
+                }
+                if let Some(next) = q.wanted.pop_front() {
+                    break next;
+                }
+                q = ready.wait(q).unwrap();
             }
-            let i = match open.iter().position(|(s, ..)| *s == source) {
-                Some(i) => i,
-                None => match Decoder::open(&source, max_width) {
-                    Ok(dec) => {
-                        if open.len() >= TILE_DECODERS {
-                            open.remove(0);
-                        }
-                        open.push((source.clone(), dec, None));
-                        open.len() - 1
+        };
+        if failed.contains(&source) {
+            continue;
+        }
+        let i = match open.iter().position(|(s, ..)| *s == source) {
+            Some(i) => i,
+            None => match Decoder::open(&source, max_side, 1) {
+                Ok(mut dec) => {
+                    dec.long_side = true;
+                    if open.len() >= TILE_DECODERS {
+                        open.remove(0);
                     }
-                    Err(_) => {
-                        failed.insert(source);
-                        continue;
-                    }
-                },
-            };
-            let entry = open.remove(i);
-            open.push(entry);
-            let (_, dec, last) = open.last_mut().expect("just pushed");
-            let Some(frame) = dec.frame_at(at, last) else {
-                continue;
-            };
-            let Ok((width, height, bgra)) = dec.frame_bgra(&frame) else {
-                continue;
-            };
-            let sent = out.send_blocking(DecodedFrame {
-                key: source.clone(),
-                source,
-                pts: at,
-                width,
-                height,
-                bgra,
-            });
-            if sent.is_err() {
-                return; // editor closed
-            }
+                    open.push((source.clone(), dec, None));
+                    open.len() - 1
+                }
+                Err(_) => {
+                    failed.insert(source);
+                    continue;
+                }
+            },
+        };
+        let entry = open.remove(i);
+        open.push(entry);
+        let (_, dec, last) = open.last_mut().expect("just pushed");
+        let Some(frame) = dec.frame_at(at, last) else {
+            continue;
+        };
+        let Ok((width, height, bgra)) = dec.frame_bgra(&frame) else {
+            continue;
+        };
+        let sent = out.send_blocking(DecodedFrame {
+            key: source.clone(),
+            source,
+            pts: at,
+            width,
+            height,
+            bgra,
+        });
+        if sent.is_err() {
+            return; // editor closed
         }
     }
 }

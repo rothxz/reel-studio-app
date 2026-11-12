@@ -23,6 +23,7 @@ pub mod icons;
 pub mod inspector;
 pub mod layers;
 pub mod library;
+pub mod picture;
 pub mod player;
 pub mod settings;
 pub mod speed_curve;
