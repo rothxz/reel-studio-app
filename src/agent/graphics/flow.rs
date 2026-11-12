@@ -510,7 +510,7 @@ impl Painter<'_> {
     }
 
     /// A soft glow round `path`: wide faint strokes under it.
-    fn glow_path(&self, pix: &mut Pixmap, path: &Path, color: Rgb, strength: f32) {
+    pub(super) fn glow_path(&self, pix: &mut Pixmap, path: &Path, color: Rgb, strength: f32) {
         if strength <= 0.01 {
             return;
         }

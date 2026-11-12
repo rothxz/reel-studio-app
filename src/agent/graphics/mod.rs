@@ -4,7 +4,9 @@
 //! growth line drawing itself, a two-column comparison, a list of steps
 //! appearing one by one, a flow diagram whose nodes light up in turn as a
 //! signal runs along its connectors (`flow.rs`), or a code editor whose
-//! steps highlight their lines.
+//! steps highlight their lines. Or the scene is composed freely
+//! (`canvas.rs`): words, numbers, icons, shapes, bars and cards, each
+//! placed, timed and moved as the script says.
 //!
 //! Every scene has a seed: it picks the layout a diagram takes when none
 //! was asked for, and where the light drifts. A video made twice from the
@@ -33,9 +35,11 @@ use tiny_skia::{
 };
 
 mod backdrops;
+pub mod canvas;
 mod flow;
 mod icons;
 
+pub use canvas::{Element, Flow};
 pub use flow::{CodeStep, Layout, Node};
 pub use icons::{Icon, technical};
 
@@ -224,6 +228,11 @@ pub enum Visual {
         lines: Vec<String>,
         steps: Vec<CodeStep>,
     },
+    /// Composed freely: elements placed, timed and moved one by one.
+    Canvas {
+        elements: Vec<Element>,
+        flow: Flow,
+    },
 }
 
 impl Visual {
@@ -237,6 +246,7 @@ impl Visual {
             Visual::List { .. } => "steps",
             Visual::Flow { .. } => "flow",
             Visual::Code { .. } => "code",
+            Visual::Canvas { .. } => "canvas",
         }
     }
 
@@ -267,6 +277,7 @@ impl Visual {
                 words.extend(title.as_deref());
                 words.extend(items.iter().map(String::as_str));
             }
+            Visual::Canvas { elements, .. } => return technical(&canvas::words(elements)),
             _ => {}
         }
         technical(&words.join(" "))
@@ -305,6 +316,10 @@ pub const KINDS: &[(&str, &str)] = &[
     (
         "code",
         "a code editor: the lines appear, then each step highlights its lines with a note (code, steps)",
+    ),
+    (
+        "canvas",
+        "compose it yourself from elements (text, number, icon, shape, bar, card, line), each placed, timed and animated: for anything the ready graphics don't show",
     ),
 ];
 
@@ -434,6 +449,7 @@ impl Scene {
                 .map(|k| (0.4 + k as f32 * 0.5, "text", 0.))
                 .filter(|(t, _, _)| *t < len - 0.3)
                 .collect(),
+            Visual::Canvas { elements, .. } => canvas::beats(elements, len),
             _ => vec![],
         }
     }
@@ -640,6 +656,8 @@ struct Painter<'a> {
     decimals: usize,
     /// `Visual::technical`: the engineer's look, else the plain one.
     tech: bool,
+    /// A canvas scene's elements placed (worked out on the first frame).
+    canvas: Option<canvas::Laid>,
 }
 
 impl<'a> Painter<'a> {
@@ -659,6 +677,7 @@ impl<'a> Painter<'a> {
             seed: scene.seed(),
             words: HashMap::new(),
             tech: scene.visual.technical(),
+            canvas: None,
             decimals: match decimals_for(&values) {
                 // Money with cents has two places ($4.50, not $4.5).
                 1 if ["$", "€", "£"].iter().any(|c| scene.prefix.contains(c)) => 2,
@@ -717,6 +736,7 @@ impl<'a> Painter<'a> {
                 &lines,
                 &steps,
             ),
+            Visual::Canvas { elements, flow } => self.canvas(&mut pix, t, &elements, flow),
         }
         pix
     }
