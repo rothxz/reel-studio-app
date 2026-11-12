@@ -96,7 +96,14 @@ pub struct Rendered {
     pub bgra: Vec<u8>,
 }
 
-type Slot = Arc<(Mutex<Option<Job>>, Condvar)>;
+/// The job waiting (latest wins), and whether the `Worker` was dropped.
+#[derive(Default)]
+struct Pending {
+    job: Option<Job>,
+    quit: bool,
+}
+
+type Slot = Arc<(Mutex<Pending>, Condvar)>;
 
 /// The render thread.
 pub struct Worker {
@@ -119,7 +126,10 @@ impl Worker {
                         let (lock, ready) = &*jobs;
                         let mut slot = lock.lock().unwrap();
                         loop {
-                            if let Some(job) = slot.take() {
+                            if slot.quit {
+                                return;
+                            }
+                            if let Some(job) = slot.job.take() {
                                 break job;
                             }
                             slot = ready.wait(slot).unwrap();
@@ -154,7 +164,16 @@ impl Worker {
     /// Replaces any job not yet started.
     pub fn submit(&self, job: Job) {
         let (lock, ready) = &*self.slot;
-        *lock.lock().unwrap() = Some(job);
+        lock.lock().unwrap().job = Some(job);
+        ready.notify_one();
+    }
+}
+
+impl Drop for Worker {
+    /// Ends the render thread (and frees its GPU device).
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.slot;
+        lock.lock().unwrap().quit = true;
         ready.notify_one();
     }
 }

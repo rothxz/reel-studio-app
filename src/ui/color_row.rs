@@ -434,14 +434,12 @@ impl Editor {
             self.color_pick = Some(pick);
             return true;
         }
-        let size = frame.size(0);
-        let (w, h) = (size.width.0 as usize, size.height.0 as usize);
-        let (x, y) = ((fx * w as f32) as usize, (fy * h as f32) as usize);
+        let (x, y) = (
+            (fx * frame.width as f32) as u32,
+            (fy * frame.height as f32) as u32,
+        );
         // The player's pictures are BGRA.
-        if let Some(px) = frame
-            .as_bytes(0)
-            .and_then(|b| b.get((y * w + x) * 4..(y * w + x) * 4 + 3))
-        {
+        if let Some(px) = frame.pixel(x, y) {
             let c = format!("#{:02x}{:02x}{:02x}", px[2], px[1], px[0]);
             (pick.apply)(self, Some(c), cx);
         }

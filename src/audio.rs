@@ -43,11 +43,22 @@ pub const MAX_FADE: Micros = 10 * SECOND;
 pub const MAX_VOLUME: f64 = 10.;
 
 enum Cmd {
-    Play { project: Arc<Project>, at: Micros },
+    Play {
+        project: Arc<Project>,
+        at: Micros,
+    },
     Stop,
-    Preview { id: String, source: String },
-    PreviewReady { id: String, stream: Result<Stream> },
+    Preview {
+        id: String,
+        source: String,
+    },
+    PreviewReady {
+        id: String,
+        stream: Result<Stream>,
+    },
     StopPreview,
+    /// The `Audio` was dropped: the mixer thread ends.
+    Quit,
 }
 
 struct Shared {
@@ -64,9 +75,17 @@ struct Shared {
 pub struct Audio {
     shared: Arc<Shared>,
     tx: Sender<Cmd>,
+    /// Dropped with the `Audio`: the output thread closes the device.
+    _out_alive: Sender<()>,
     rate: u32,
     /// Where the playing timeline started (timeline time).
     started: Option<Micros>,
+}
+
+impl Drop for Audio {
+    fn drop(&mut self) {
+        let _ = self.tx.send(Cmd::Quit);
+    }
 }
 
 impl Audio {
@@ -80,16 +99,16 @@ impl Audio {
         });
         // The stream lives on its own thread (it isn't Send everywhere).
         let (rate_tx, rate_rx) = channel::<Option<u32>>();
+        let (alive_tx, alive_rx) = channel::<()>();
         let out = shared.clone();
         std::thread::Builder::new()
             .name("audio-out".into())
             .spawn(move || match open_output(out) {
                 Ok((stream, rate)) => {
                     let _ = rate_tx.send(Some(rate));
-                    let _keep = stream;
-                    loop {
-                        std::thread::park();
-                    }
+                    // Until the `Audio` goes (its sender drops).
+                    let _ = alive_rx.recv();
+                    drop(stream);
                 }
                 Err(e) => {
                     eprintln!("no sound output: {e:#}");
@@ -108,6 +127,7 @@ impl Audio {
         Some(Audio {
             shared,
             tx,
+            _out_alive: alive_tx,
             rate,
             started: None,
         })
@@ -630,6 +650,9 @@ impl Mixer {
                 rx.try_recv().ok()
             };
             if let Some(cmd) = cmd {
+                if matches!(cmd, Cmd::Quit) {
+                    return;
+                }
                 self.command(cmd);
                 continue;
             }
@@ -697,6 +720,7 @@ impl Mixer {
                     self.restart_output();
                 }
             }
+            Cmd::Quit => {}
         }
     }
 

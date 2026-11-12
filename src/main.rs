@@ -22,6 +22,7 @@ mod face_swap;
 mod gizmo;
 mod history;
 mod i18n;
+mod image_cache;
 mod library;
 mod links;
 mod model;
