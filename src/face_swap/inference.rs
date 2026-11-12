@@ -53,11 +53,12 @@ fn environment() -> Result<&'static Environment> {
     .map_err(Clone::clone)
 }
 
-/// ONNX Runtime: linked in on macOS and Windows, loaded on Linux.
+/// ONNX Runtime: linked in on Apple silicon and Windows, loaded on Linux
+/// and Intel Macs (`runtime`).
 fn runtime() -> Result<ort::environment::EnvironmentBuilder> {
-    #[cfg(target_os = "linux")]
+    #[cfg(ort_dynamic)]
     return super::runtime::load().map_err(FaceSwapError::RuntimeMissing);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(ort_dynamic))]
     Ok(ort::init())
 }
 

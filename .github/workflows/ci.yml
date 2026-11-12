@@ -37,6 +37,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-apple-darwin
 
       - name: Metal toolchain
         run: xcrun -f metal > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
@@ -63,6 +64,12 @@ jobs:
       # The Linux / Windows preview renderer (wgpu), here on Metal: the
       # same composition checks as the Metal renderer's.
       - run: "cargo test --locked --features wgpu-effects effects::"
+      # Intel Macs (a release target) take ONNX Runtime another way (loaded
+      # at run time, an older API level): type-check them too.
+      - name: Check the Intel Mac build
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+        run: cargo check --locked --all-targets --target x86_64-apple-darwin
 
       - name: Check packaging scripts
         run: bash -n packaging/macos/*.sh packaging/linux/*.sh packaging/windows/*.sh packaging/*.sh
@@ -86,6 +93,7 @@ jobs:
       # run on a GPU-less runner.
       - name: System packages
         run: |
+        
           # The runner's package mirror sometimes drops out (DNS failures
           # for minutes): retry each download, then the whole step.
           for attempt in 1 2 3; do

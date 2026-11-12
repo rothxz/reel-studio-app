@@ -50,6 +50,23 @@ if otool -L "$app/Contents/MacOS/$EXE" | tail -n +2 | grep -vE '^\s+(/System/Lib
   exit 1
 fi
 
+# Intel Macs load ONNX Runtime (face swap) from the bundle at run time
+# (src/face_swap/runtime.rs looks in Contents/Frameworks); Apple silicon
+# links it in.
+if [ "$arch" = x64 ]; then
+  "$here/fetch-onnxruntime.sh" x64 "$work/onnxruntime"
+  mkdir -p "$app/Contents/Frameworks"
+  cp "$work/onnxruntime/libonnxruntime.dylib" "$app/Contents/Frameworks/"
+  cp "$work/onnxruntime/onnxruntime-LICENSE.txt" "$work/onnxruntime/onnxruntime-ThirdPartyNotices.txt" \
+    "$app/Contents/Resources/"
+  # Only macOS's own libraries (the first line is the library's own name).
+  if otool -L "$app/Contents/Frameworks/libonnxruntime.dylib" | tail -n +3 \
+    | grep -vE '^\s+(/System/Library/|/usr/lib/)'; then
+    echo "ONNX Runtime links libraries outside macOS (above)" >&2
+    exit 1
+  fi
+fi
+
 # Icon: every size iconutil wants, from the 256 px app icon.
 iconset="$work/AppIcon.iconset"
 mkdir -p "$iconset"
@@ -88,10 +105,23 @@ PLIST
 plutil -lint "$app/Contents/Info.plist" > /dev/null
 
 identity=${MAC_SIGN_IDENTITY:-}
+# The libraries in Contents/Frameworks first, then the app: under the
+# hardened runtime the app only loads libraries signed by its own team.
+libs=()
+if [ -d "$app/Contents/Frameworks" ]; then
+  while IFS= read -r -d '' lib; do libs+=("$lib"); done \
+    < <(find "$app/Contents/Frameworks" -name '*.dylib' -print0)
+fi
 if [ -n "$identity" ]; then
+  for lib in ${libs[@]+"${libs[@]}"}; do
+    codesign --force --options runtime --timestamp --sign "$identity" "$lib"
+  done
   codesign --force --options runtime --timestamp --sign "$identity" "$app"
 else
   echo "warning: no MAC_SIGN_IDENTITY, ad-hoc signing" >&2
+  for lib in ${libs[@]+"${libs[@]}"}; do
+    codesign --force --sign - "$lib"
+  done
   codesign --force --sign - "$app"
 fi
 codesign --verify --deep --strict "$app"

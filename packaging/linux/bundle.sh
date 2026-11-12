@@ -18,7 +18,7 @@
 #
 # The binary must link FFmpeg statically (build with FFMPEG_DIR from
 # packaging/linux/build-ffmpeg.sh): it may only need libraries every
-# desktop has (glibc, libstdc++, ALSA, zlib, bzip2, X11 / Wayland, xkbcommon;
+# desktop has (glibc, libstdc++, ALSA, zlib, X11 / Wayland, xkbcommon;
 # Vulkan, fontconfig and Wayland's client are loaded when used). Build it on
 # the oldest glibc to support (the release uses Ubuntu 22.04).
 #
@@ -79,6 +79,13 @@ if echo "$deps" | grep -q "not found"; then
 fi
 if echo "$deps" | grep -qE 'lib(av|sw)[a-z]+\.so'; then
   echo "the binary links a shared FFmpeg; build with a static one (build-ffmpeg.sh)" >&2
+  exit 1
+fi
+# Libraries named differently across distributions: Debian / Ubuntu's
+# libbz2.so.1.0 is libbz2.so.1 on Fedora and openSUSE, so a binary that
+# links it won't start (or its .rpm install) there.
+if echo "$deps" | grep -qE 'libbz2\.so\.1\.0'; then
+  echo "the binary links libbz2.so.1.0 (Debian's name only); build FFmpeg without bzip2 (build-ffmpeg.sh)" >&2
   exit 1
 fi
 

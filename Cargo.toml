@@ -28,12 +28,14 @@ ureq = "3"
 # macOS, on macOS only with the `wgpu-effects` feature (to test it there).
 wgpu = { version = "25", optional = true, default-features = false, features = ["glsl", "metal"] }
 pollster = { version = "0.4", optional = true }
-# Face swap inference (src/face_swap/): ONNX Runtime. On macOS and Windows
-# its prebuilt library is fetched at build time and linked in; on Linux it's
-# loaded at run time (below). The models are never bundled
-# (<data>/models/face-swap). `half`: fp16 model inputs. GPU providers per
-# platform below.
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-31", "half"] }
+# Face swap inference (src/face_swap/): ONNX Runtime. On Apple silicon and
+# Windows its prebuilt library is fetched at build time and linked in; on
+# Linux and Intel Macs it's loaded at run time from the copy the release
+# ships (below; build.rs sets `ort_dynamic` for exactly those targets). The
+# models are never bundled (<data>/models/face-swap). `half`: fp16 model
+# inputs. The API level (`api-NN`, the oldest ONNX Runtime 1.NN it works
+# with) and GPU providers per platform below.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "half"] }
 half = "2"
 
 # Free disk space for Settings → Storage Usage (statvfs).
@@ -49,11 +51,20 @@ block = "0.1"
 # The AI agent's API keys, kept in the login keychain.
 security-framework = "3"
 # Face swap on the GPU / Neural Engine (falls back to the CPU per op).
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml", "download-binaries", "copy-dylibs", "tls-native"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["coreml"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["api-31", "download-binaries", "copy-dylibs", "tls-native"] }
+
+# Intel Macs: ort has no prebuilt library for them, and Microsoft's last
+# Intel build is 1.23.2, so the app bundles that one
+# (packaging/macos/fetch-onnxruntime.sh) and loads it at run time.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["api-23", "load-dynamic"] }
 
 # Face swap on any DirectX 12 GPU.
 [target.'cfg(windows)'.dependencies]
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directml", "download-binaries", "copy-dylibs", "tls-native"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["api-31", "directml", "download-binaries", "copy-dylibs", "tls-native"] }
 
 # Face swap on Linux loads ONNX Runtime when it starts
 # (src/face_swap/runtime.rs): the library ort would link was built on a
@@ -61,7 +72,7 @@ ort = { version = "=2.0.0-rc.15", default-features = false, features = ["directm
 # the release ships Microsoft's own build next to the program
 # (packaging/linux/fetch-onnxruntime.sh).
 [target.'cfg(target_os = "linux")'.dependencies]
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["api-31", "load-dynamic"] }
 
 # Off macOS the preview draws on wgpu: Vulkan (Linux), DX12 or Vulkan (Windows).
 [target.'cfg(not(target_os = "macos"))'.dependencies]

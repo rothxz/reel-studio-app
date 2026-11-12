@@ -21,6 +21,7 @@ fn main() {
     release_inputs();
     static_ffmpeg();
     windows_resources();
+    ort_dynamic();
     if std::env::var_os("CARGO_FEATURE_CPP_ENGINE").is_none() {
         return;
     }
@@ -409,6 +410,18 @@ fn static_ffmpeg() {
                 println!("cargo:rustc-link-lib={link}");
             }
         }
+    }
+}
+
+/// `cfg(ort_dynamic)`: targets that load ONNX Runtime at run time
+/// (src/face_swap/runtime.rs) instead of linking it: Linux and Intel Macs,
+/// the same split as ort's `load-dynamic` feature in Cargo.toml.
+fn ort_dynamic() {
+    println!("cargo:rustc-check-cfg=cfg(ort_dynamic)");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if os == "linux" || (os == "macos" && arch == "x86_64") {
+        println!("cargo:rustc-cfg=ort_dynamic");
     }
 }
 

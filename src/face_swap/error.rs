@@ -10,9 +10,9 @@ pub enum FaceSwapError {
     ModelMismatch(&'static str),
     /// A model's inputs / outputs aren't what the pipeline was written for.
     ModelShape(String),
-    /// ONNX Runtime's library isn't there or won't load (Linux, where it
-    /// isn't linked in): what was looked for.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// ONNX Runtime's library isn't there or won't load (Linux and Intel
+    /// Macs, where it isn't linked in): what was looked for.
+    #[cfg_attr(not(ort_dynamic), allow(dead_code))]
     RuntimeMissing(String),
     /// ONNX Runtime failed (load or run).
     Inference(String),
