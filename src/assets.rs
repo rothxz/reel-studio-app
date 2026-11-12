@@ -256,14 +256,57 @@ pub struct Picture {
     pub image: Option<Arc<RenderImage>>,
 }
 
+/// A tile picture's shorter side at most (device pixels): tiles show
+/// at ~100–200 points, so a full-size download is shrunk to fit.
+const TILE_SIDE: u32 = 400;
+
+/// The jobs waiting (newest last), and whether the server was dropped.
+#[derive(Default)]
+struct Queue {
+    jobs: Vec<PictureJob>,
+    quit: bool,
+}
+
 /// Fetches + decodes tile pictures of one bucket on worker threads.
 pub struct PictureServer {
-    queue: Arc<(Mutex<Vec<PictureJob>>, Condvar)>,
+    queue: Arc<(Mutex<Queue>, Condvar)>,
+}
+
+impl Drop for PictureServer {
+    /// Ends the workers (each finishes the job in hand first).
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap().quit = true;
+        ready.notify_all();
+    }
+}
+
+/// Scales `frames` down so the shorter side is at most `side` (never up).
+fn shrink(frames: Vec<Frame>, side: u32) -> Vec<Frame> {
+    frames
+        .into_iter()
+        .map(|f| {
+            let (w, h) = f.buffer().dimensions();
+            let short = w.min(h);
+            if short <= side {
+                return f;
+            }
+            let k = side as f64 / short as f64;
+            let (nw, nh) = (
+                ((w as f64 * k).round() as u32).max(1),
+                ((h as f64 * k).round() as u32).max(1),
+            );
+            let (left, top, delay) = (f.left(), f.top(), f.delay());
+            let small =
+                image::imageops::resize(f.buffer(), nw, nh, image::imageops::FilterType::Triangle);
+            Frame::from_parts(small, left, top, delay)
+        })
+        .collect()
 }
 
 impl PictureServer {
     pub fn new(bucket: &'static str, out: async_channel::Sender<Picture>) -> Self {
-        let queue: Arc<(Mutex<Vec<PictureJob>>, Condvar)> = Arc::default();
+        let queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
         for i in 0..WORKERS {
             let queue = queue.clone();
             let out = out.clone();
@@ -273,17 +316,21 @@ impl PictureServer {
                     loop {
                         let job = {
                             let (lock, ready) = &*queue;
-                            let mut jobs = lock.lock().unwrap();
+                            let mut queue = lock.lock().unwrap();
                             loop {
+                                if queue.quit {
+                                    return;
+                                }
                                 // Newest first: what was just shown.
-                                if let Some(job) = jobs.pop() {
+                                if let Some(job) = queue.jobs.pop() {
                                     break job;
                                 }
-                                jobs = ready.wait(jobs).unwrap();
+                                queue = ready.wait(queue).unwrap();
                             }
                         };
                         let image = fetch(bucket, &job.key)
                             .and_then(|bytes| decode(&bytes, job.animated))
+                            .map(|frames| shrink(frames, TILE_SIDE))
                             .map(|frames| Arc::new(RenderImage::new(frames)));
                         if let Err(e) = &image {
                             eprintln!("tile picture {}: {e:#}", job.key);
@@ -304,7 +351,7 @@ impl PictureServer {
 
     pub fn request(&self, job: PictureJob) {
         let (lock, ready) = &*self.queue;
-        let mut jobs = lock.lock().unwrap();
+        let jobs = &mut lock.lock().unwrap().jobs;
         // Asked again: move it to the front.
         jobs.retain(|j| *j != job);
         jobs.push(job);

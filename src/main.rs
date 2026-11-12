@@ -6,6 +6,7 @@ mod agent;
 mod analytics;
 mod assets;
 mod audio;
+mod beats;
 mod caption_styles;
 mod captions;
 mod catalog;
@@ -22,6 +23,7 @@ mod face_swap;
 mod gizmo;
 mod history;
 mod i18n;
+mod image_cache;
 mod library;
 mod links;
 mod model;
@@ -102,6 +104,7 @@ pub fn set_app_menus(cx: &mut App) {
                 item(DeleteLeft),
                 item(DeleteRight),
                 item(Deactivate),
+                item(AddBeat),
                 MenuItem::separator(),
                 item(Deselect),
             ],
@@ -135,6 +138,8 @@ pub fn set_app_menus(cx: &mut App) {
                 item(Forward1s),
                 item(PrevEdit),
                 item(NextEdit),
+                item(PrevBeat),
+                item(NextBeat),
                 MenuItem::separator(),
                 item(GoStart),
                 item(GoEnd),

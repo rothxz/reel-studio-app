@@ -77,6 +77,125 @@ struct Builtin {
 /// job of several steps.
 const BUILTINS: &[Builtin] = &[
     Builtin {
+        name: "video",
+        description: "Write a whole video scene by scene, any length: plan it, write each scene, build it. For videos of 30 seconds or more.",
+        triggers: &[
+            "make a video",
+            "make me a video",
+            "create a video",
+            "generate a video",
+            "video about",
+            "video on",
+            "video explaining",
+            "video that explains",
+            "explainer",
+            "storyboard",
+            "second video",
+            "seconds video",
+            "sec video",
+            "minute video",
+            "min video",
+            "long video",
+            "promo video",
+            "video script",
+            "from a prompt",
+            "scene by scene",
+        ],
+        tools: &["start_video", "write_scene", "build_video", "check_video"],
+        body: "\
+A video of 30 seconds or more, or one with several points, is written scene by scene. (A quick short one is one make_video call.)
+1. Plan first: the one idea a viewer should remember, then a line per scene. Scene 1 is a hook (a question, a surprising number, the result first). The middle is one point per scene. The last scene is the takeaway. About one scene per 10 seconds asked.
+2. start_video with duration (the seconds asked), the outline (those lines), and what the whole video shares: palette, voice, music.
+3. write_scene once per scene, in order:
+   - narration: what is SAID. 2–4 spoken sentences, 20–40 words (2.5 words a second).
+   - title: the key point ON SCREEN, 2–6 words. Never the narration again.
+   - visual: what shows it. Numbers → bar_chart, line_chart, counter. A contrast → comparison. How-to → steps. How something works → flow. Programming → code. Anything else → canvas (you compose it: use_skill motion_graphics), or background with 1–2 stickers. Change the visual from scene to scene.
+4. Every answer lists what to fix (\"fix\") and names the next step (\"next\"): make the fixes, then do what next says.
+5. build_video once every scene is written. It takes a minute. Then say what you made.
+A change later: write_scene with \"scene\": its number, then build_video again.
+
+Example (\"a 45 second video about sleep\"):
+start_video {\"title\": \"Why sleep matters\", \"duration\": 45, \"palette\": \"night\", \"outline\": [\"Hook: a third of your life\", \"What sleep repairs\", \"What too little does\", \"Three habits\", \"Takeaway: start tonight\"]}
+write_scene {\"narration\": \"You will spend a third of your life asleep. That is twenty five years. So what is your body doing with all that time?\", \"title\": \"25 years asleep\", \"visual\": \"counter\", \"to\": 25, \"suffix\": \" years\"}
+write_scene {\"narration\": \"While you sleep, your body works the night shift. Your brain clears out the day's waste, your muscles repair, and your memory files away what you learned.\", \"title\": \"The night shift\", \"visual\": \"flow\", \"nodes\": [{\"label\": \"Brain\", \"note\": \"clears the day's waste\"}, {\"label\": \"Muscles\", \"note\": \"repair and grow\"}, {\"label\": \"Memory\", \"note\": \"files what you learned\"}]}
+(one write_scene for each line of the outline)
+build_video {}",
+    },
+    Builtin {
+        name: "motion_graphics",
+        description: "Compose a motion-graphic scene yourself on a canvas: words, numbers, icons, shapes, bars, cards and lines, each placed, timed and animated.",
+        triggers: &[
+            "motion graphic",
+            "motion graphics",
+            "motion video",
+            "motion design",
+            "motion clip",
+            "animated video",
+            "animated scene",
+            "animated explainer",
+            "animated infographic",
+            "animation video",
+            "infographic",
+            "kinetic",
+            "canvas",
+            "compose a scene",
+        ],
+        tools: &["add_scene", "write_scene", "start_video", "build_video"],
+        body: "\
+visual \"canvas\" draws a scene from the elements you list: in write_scene (a scene of a whole video) or add_scene (one scene in an edit). The stage is the middle of the frame; the title sits above it and captions below.
+Each element is ONE of:
+- {\"text\": \"Small steps win\"}: words
+- {\"number\": 87, \"suffix\": \"%\", \"label\": \"finish the course\"}: counts up
+- {\"icon\": \"rocket\", \"label\": \"Launch\"}: a line icon in a disc
+- {\"shape\": \"ring\"}: circle, ring, rect, pill, triangle, star, line
+- {\"bar\": 72, \"label\": \"Battery\"}: a progress bar, percent
+- {\"card\": \"Sleep\", \"detail\": \"7–9 hours\", \"icon\": \"moon\"}: a panel
+- {\"line\": [\"a\", \"b\"]}: an arrow from the element with \"id\": \"a\" to the one with \"id\": \"b\"
+On any element: size (hero, large, medium, small), color (accent, accent2, accent3, text, muted, #hex), in (fade, rise, drop, slide_left, slide_right, pop, grow, spin, draw, type, words), end + out (when and how it leaves), loop (float, pulse, spin).
+Where: leave \"at\" out and the elements are laid out for you by arrange: stack (one under another, the default), row or grid. Or place one with \"at\": \"x,y\" (0–1 across the stage: \"0.5,0.2\" is top middle) or a name (center, top_left, bottom_right…).
+When: leave \"start\" out and they come in one after another through the scene, in the order listed: list them in the order the narration mentions them. Or give start (seconds into the scene).
+Moves: \"moves\": [{\"at\": 2, \"x\": 0.8, \"y\": 0.3, \"scale\": 1.4, \"duration\": 0.8}] sends it there from second 2.
+
+What makes it look designed:
+- One idea a scene, 3–6 elements: one hero (a big number, or 1–3 big words), the rest small.
+- Different ways in for different things, never everything rising the same way.
+- Something changes every 2–3 seconds: staggered starts, or one element with a move.
+- A title sits still once it has landed. Loops are for things that turn or float in life.
+- accent for the one thing that matters, muted for labels.
+
+Examples:
+- a stat: {\"visual\": \"canvas\", \"elements\": [{\"text\": \"Course finish rate\", \"size\": \"small\", \"color\": \"muted\"}, {\"number\": 87, \"suffix\": \"%\"}, {\"bar\": 87, \"label\": \"With a study buddy\"}, {\"bar\": 31, \"label\": \"Alone\", \"color\": \"muted\"}]}
+- a process: {\"visual\": \"canvas\", \"arrange\": \"row\", \"elements\": [{\"icon\": \"bulb\", \"label\": \"Idea\", \"id\": \"a\"}, {\"icon\": \"gear\", \"label\": \"Build\", \"id\": \"b\"}, {\"icon\": \"rocket\", \"label\": \"Launch\", \"id\": \"c\"}, {\"line\": [\"a\", \"b\"]}, {\"line\": [\"b\", \"c\"]}]}
+- a big line: {\"visual\": \"canvas\", \"elements\": [{\"shape\": \"ring\", \"at\": \"center\", \"size\": \"hero\", \"color\": \"accent2\"}, {\"text\": \"3×\", \"size\": \"hero\", \"at\": \"0.5,0.45\", \"color\": \"accent\"}, {\"text\": \"faster than last year\", \"size\": \"small\", \"at\": \"0.5,0.62\"}]}
+- four facts: {\"visual\": \"canvas\", \"arrange\": \"grid\", \"elements\": [{\"card\": \"Sleep\", \"detail\": \"7–9 hours\", \"icon\": \"moon\"}, {\"card\": \"Water\", \"detail\": \"2 litres\", \"icon\": \"drop\"}, {\"card\": \"Move\", \"detail\": \"30 minutes\", \"icon\": \"heart\"}, {\"card\": \"Sun\", \"detail\": \"10 minutes\", \"icon\": \"sun\"}]}",
+    },
+    Builtin {
+        name: "review",
+        description: "Look a finished edit over for what a viewer would notice (black gaps, sound past the end, unreadable words) and fix it.",
+        triggers: &[
+            "check the video",
+            "check my video",
+            "check the edit",
+            "check the timeline",
+            "review",
+            "anything wrong",
+            "what's wrong",
+            "find problems",
+            "find mistakes",
+            "polish",
+            "ready to export",
+            "before i export",
+            "quality check",
+        ],
+        tools: &["check_video"],
+        body: "\
+1. check_video {} lists what a viewer would notice, each problem with the call that fixes it.
+2. Make every fix it lists (the calls are written out: copy them).
+3. check_video {} again until it says ok. Its tips are suggestions: take the ones that fit what the user asked for.
+4. Say in a sentence or two what you fixed. If nothing was wrong, say the video is ready.
+look {} shows you frames when the question is how it looks, not how it is put together.",
+    },
+    Builtin {
         name: "keyframes",
         description: "Animate by hand: a clip moving, growing, turning or fading between times you choose.",
         triggers: &[
@@ -243,15 +362,12 @@ Examples:
             "counter",
             "comparison",
             "diagram",
-            "infographic",
-            "motion graphic",
-            "motion graphics",
             "scene",
         ],
         tools: &["add_scene"],
         body: "\
 - add_scene draws one scene and puts it on the main lane (at the cut nearest start, default the end). make_video is for a whole video; add_scene is for one more scene in an edit.
-- visual picks the graphic: bar_chart / line_chart (items \"Label: value\"), counter (to, with prefix \"$\" or suffix \"%\"), comparison, steps (items as short lines), flow (nodes in order), code, or background alone. title is the heading, 2–6 words.
+- visual picks the graphic: bar_chart / line_chart (items \"Label: value\"), counter (to, with prefix \"$\" or suffix \"%\"), comparison, steps (items as short lines), flow (nodes in order), code, or background alone. What none of these shows: canvas, composed from elements (use_skill motion_graphics).
 
 Examples:
 - \"add a bar chart of our sales: 2023 $40k, 2024 $65k\" → add_scene {\"visual\": \"bar_chart\", \"title\": \"Sales\", \"items\": [\"2023: $40k\", \"2024: $65k\"]}
@@ -301,7 +417,7 @@ Examples (main clips c1, c2):
             "cut down",
             "trailer",
         ],
-        tools: &["look", "split_clip", "delete_clip"],
+        tools: &["look", "split_clip", "delete_clip", "check_video"],
         body: "\
 Work through these steps in order, without asking at each one:
 1. look {} to see what the video shows and where the good moments are.
@@ -309,6 +425,7 @@ Work through these steps in order, without asking at each one:
 3. add_title with a short title for the reel at 0s (style pop or headline).
 4. add_music {\"mood\": \"upbeat\"} (or a mood that fits what look saw).
 5. sound_design {}.
+6. check_video {} and make the fixes it lists.
 Then say in two sentences what you kept and what you added.",
     },
 ];
@@ -686,7 +803,32 @@ mod tests {
         assert!(route(&skills, "split the first clip at 1.5 seconds").is_empty());
         assert!(route(&skills, "add some chill music").is_empty());
         assert!(route(&skills, "add sound effects").is_empty());
+        assert!(route(&skills, "what happens in my video?").is_empty());
+        assert!(route(&skills, "put an animated title at the start").is_empty());
         assert!(route(&skills, "x").is_empty());
+        // Making a video is written scene by scene; a composed one loads
+        // the canvas too.
+        assert_eq!(
+            names(&route(
+                &skills,
+                "Make a 60-second explainer about saving money"
+            )),
+            ["video"]
+        );
+        assert_eq!(
+            names(&route(
+                &skills,
+                "create a video about black holes with motion graphics"
+            )),
+            ["video", "motion_graphics"]
+        );
+        assert_eq!(
+            names(&route(
+                &skills,
+                "is anything wrong? check my video before I export"
+            )),
+            ["review"]
+        );
     }
 
     #[test]

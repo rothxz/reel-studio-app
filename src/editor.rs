@@ -24,6 +24,7 @@ use crate::effects::stack::{self as fx_stack, LiveParam, Needs, Sources, Stack};
 use crate::effects::{self, Rendered};
 use crate::engine::{self, Engine, LayerKind};
 use crate::history::History;
+use crate::image_cache::Bounded;
 use crate::model::{self, Clip, MediaItem, Micros, Project, SECOND, Side, TrackType};
 use crate::prefs::Prefs;
 use crate::projects;
@@ -51,8 +52,14 @@ actions!(
 
 /// Preview frames are decoded at most this wide (the player is ~800 px).
 const PREVIEW_MAX_WIDTH: u32 = 1280;
-/// Filmstrip tiles are decoded this wide (a 44 px tile at 2×, some slack).
+/// Filmstrip tiles are decoded this big on their longer side (a 44 px
+/// tile at 2×, some slack; a portrait video's isn't taller).
 const TILE_MAX_WIDTH: u32 = 128;
+/// Filmstrip tiles kept (~37 KB each); a zoom asks for new times, so the
+/// oldest go (asked again if they come back into view).
+const TILES_KEPT: usize = 1200;
+/// Effect / sticker tile pictures kept (a browser grid shows ~60).
+const STILLS_KEPT: usize = 300;
 
 // Layout (old editor's desktop layout).
 pub const HEADER_HEIGHT: f32 = 40.;
@@ -370,7 +377,7 @@ pub struct Editor {
     effects_named: HashSet<String>,
     /// Effect / filter tile pictures: first frames by key (None: failed),
     /// the few animations played on hover, and what's been asked for.
-    pub(crate) stills: HashMap<String, Option<Arc<RenderImage>>>,
+    pub(crate) stills: Bounded<String, Option<Arc<RenderImage>>>,
     pub(crate) anims: Vec<(String, Arc<RenderImage>)>,
     pub(crate) pictures_pending: RefCell<HashSet<PictureJob>>,
     pub(crate) picture_server: PictureServer,
@@ -422,11 +429,13 @@ pub struct Editor {
     pub(crate) pointer: Point<Pixels>,
     pub(crate) edge_scroll_at: Option<Instant>,
     /// Filmstrip tiles by (file, source time), and the ones asked for.
-    pub(crate) tiles: HashMap<(String, Micros), Arc<RenderImage>>,
+    pub(crate) tiles: Bounded<(String, Micros), Arc<RenderImage>>,
     pub(crate) tiles_pending: HashSet<(String, Micros)>,
     pub(crate) tile_server: TileServer,
     /// Waveform peaks by file (None while decoding, or when it has no sound).
     pub(crate) waves: HashMap<String, Option<Arc<Waveform>>>,
+    /// Beat analyses done and running (Audio › Beats).
+    pub(crate) beat_jobs: crate::ui::beats::BeatJobs,
 
     servers: HashMap<String, FrameServer>,
     frame_tx: async_channel::Sender<DecodedFrame>,
@@ -466,7 +475,7 @@ pub struct Editor {
     fx_last: Option<(u64, Stack, bool)>,
     fx_seq: u64,
     fx_shown: u64,
-    pub(crate) frame: Option<Arc<RenderImage>>,
+    pub(crate) frame: Option<crate::ui::picture::FramePicture>,
     pub(crate) stale_frames: Vec<Arc<RenderImage>>,
     pub(crate) frame_info: Option<(u32, u32, Micros)>,
     fps_window: (Instant, u32),
@@ -596,7 +605,7 @@ impl Editor {
             fx_adjust_open: false,
             effects: EffectCatalog::load(),
             effects_named: HashSet::new(),
-            stills: HashMap::new(),
+            stills: Bounded::new(STILLS_KEPT),
             anims: vec![],
             pictures_pending: RefCell::default(),
             picture_server: PictureServer::new(assets::EFFECT_PREVIEWS, picture_tx.clone()),
@@ -623,10 +632,11 @@ impl Editor {
             media_drop: None,
             pointer: Point::default(),
             edge_scroll_at: None,
-            tiles: HashMap::new(),
+            tiles: Bounded::new(TILES_KEPT),
             tiles_pending: HashSet::new(),
             tile_server: TileServer::spawn(TILE_MAX_WIDTH, tile_tx),
             waves: HashMap::new(),
+            beat_jobs: Default::default(),
             servers: HashMap::new(),
             frame_tx,
             wanted: vec![],
@@ -701,7 +711,8 @@ impl Editor {
                 }
             }
         } else {
-            self.stills.insert(p.job.key, p.image);
+            let gone = self.stills.insert(p.job.key, p.image);
+            self.stale_frames.extend(gone.into_iter().flatten());
         }
         cx.notify();
     }
@@ -1001,7 +1012,7 @@ impl Editor {
         self.servers.clear();
         self.forget_layers();
         if let Some(old) = self.frame.take() {
-            self.stale_frames.push(old);
+            self.stale_frames.push(old.image);
         }
         self.frame_info = None;
         self.media.clear();
@@ -1035,7 +1046,8 @@ impl Editor {
         self.lane_scroll_y = 0.;
         self.hover = None;
         self.drag = None;
-        self.tiles.clear();
+        let gone = self.tiles.clear();
+        self.stale_frames.extend(gone);
         self.tiles_pending.clear();
         self.screen = Screen::Editor;
         self.commit(cx);
@@ -1181,7 +1193,7 @@ impl Editor {
         self.servers.clear();
         self.forget_layers();
         if let Some(old) = self.frame.take() {
-            self.stale_frames.push(old);
+            self.stale_frames.push(old.image);
         }
         self.popup = None;
         self.analytics.end(Some(&self.project));
@@ -1378,6 +1390,9 @@ impl Editor {
             Shortcut::Forward1s => self.seek_by(SECOND, cx),
             Shortcut::PrevEdit => self.jump_to_edit_point(-1, cx),
             Shortcut::NextEdit => self.jump_to_edit_point(1, cx),
+            Shortcut::PrevBeat => self.step_beat(-1, cx),
+            Shortcut::NextBeat => self.step_beat(1, cx),
+            Shortcut::AddBeat => self.toggle_beat_at_playhead(cx),
             Shortcut::GoStart => {
                 self.pause();
                 self.seek(0, cx)
@@ -2001,7 +2016,7 @@ impl Editor {
         if wanted.is_empty() {
             self.forget_layers();
             if let Some(old) = self.frame.take() {
-                self.stale_frames.push(old);
+                self.stale_frames.push(old.image);
             }
             self.frame_info = None;
             return;
@@ -2151,7 +2166,8 @@ impl Editor {
             return;
         };
         let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
-        self.tiles.insert(key, image);
+        let gone = self.tiles.insert(key, image);
+        self.stale_frames.extend(gone);
         cx.notify();
     }
 
@@ -2312,12 +2328,11 @@ impl Editor {
     }
 
     fn show_picture(&mut self, width: u32, height: u32, bgra: Vec<u8>) {
-        let Some(buffer) = image::RgbaImage::from_raw(width, height, bgra) else {
+        let Some(picture) = crate::ui::picture::FramePicture::new(width, height, bgra) else {
             return;
         };
-        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
-        if let Some(old) = self.frame.replace(image) {
-            self.stale_frames.push(old);
+        if let Some(old) = self.frame.replace(picture) {
+            self.stale_frames.push(old.image);
         }
     }
 
@@ -2767,12 +2782,15 @@ impl Render for Editor {
             Forward1s,
             PrevEdit,
             NextEdit,
+            PrevBeat,
+            NextBeat,
             GoStart,
             GoEnd,
             SplitClip,
             DeleteLeft,
             DeleteRight,
             Deactivate,
+            AddBeat,
             DeleteClip,
             Duplicate,
             CopyClip,

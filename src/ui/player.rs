@@ -3,8 +3,8 @@
 //! previous frame, play, next frame, go to end | ratio, full screen.
 
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Rgba,
-    div, img, prelude::*, px, rgb,
+    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Rgba, div,
+    prelude::*, px, rgb,
 };
 
 use crate::editor::{Editor, PopupItem, timecode};
@@ -75,15 +75,7 @@ impl Editor {
             (cw * scale, ch * scale)
         });
 
-        let picture: Option<AnyElement> = self.frame.as_ref().map(|frame| {
-            // Absolute, so the picture's own size never drives the layout.
-            img(frame.clone())
-                .absolute()
-                .inset_0()
-                .size_full()
-                .object_fit(ObjectFit::Contain)
-                .into_any_element()
-        });
+        let picture: Option<AnyElement> = self.frame.as_ref().map(|frame| frame.element());
 
         let canvas = div()
             .relative()

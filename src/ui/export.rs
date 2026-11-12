@@ -5,12 +5,11 @@
 //! Retry when it failed or was stopped.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, FontWeight, MouseButton, ObjectFit, Pixels, Point, RenderImage,
-    SharedString, Window, canvas, div, img, point, prelude::*, px,
+    AnyElement, Bounds, Context, FontWeight, MouseButton, Pixels, Point, SharedString, Window,
+    canvas, div, point, prelude::*, px,
 };
 use serde_json::json;
 
@@ -55,7 +54,7 @@ pub struct ExportView {
     /// 0–1.
     pub progress: f32,
     /// The frame just written.
-    pub preview: Option<Arc<RenderImage>>,
+    pub preview: Option<crate::ui::picture::FramePicture>,
     started: Instant,
 }
 
@@ -196,7 +195,7 @@ impl Editor {
         self.export_seq += 1;
         let id = self.export_seq;
         if let Some(old) = self.export.take().and_then(|v| v.preview) {
-            self.stale_frames.push(old);
+            self.stale_frames.push(old.image);
         }
         self.export = Some(ExportView {
             id,
@@ -235,12 +234,10 @@ impl Editor {
             } => {
                 view.progress = (done as f32 / total.max(1) as f32).min(1.);
                 if let Some((w, h, bgra)) = preview
-                    && let Some(buffer) = image::RgbaImage::from_raw(w, h, bgra)
+                    && let Some(picture) = crate::ui::picture::FramePicture::new(w, h, bgra)
+                    && let Some(old) = view.preview.replace(picture)
                 {
-                    let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
-                    if let Some(old) = view.preview.replace(image) {
-                        self.stale_frames.push(old);
-                    }
+                    self.stale_frames.push(old.image);
                 }
             }
             Update::Finished => {
@@ -315,7 +312,7 @@ impl Editor {
 
     fn dismiss_export(&mut self, cx: &mut Context<Self>) {
         if let Some(old) = self.export.take().and_then(|v| v.preview) {
-            self.stale_frames.push(old);
+            self.stale_frames.push(old.image);
         }
         cx.notify();
     }
@@ -404,13 +401,7 @@ impl Editor {
             .justify_center()
             .gap_2()
             .map(|d| match &view.preview {
-                Some(image) => d.child(
-                    img(image.clone())
-                        .absolute()
-                        .inset_0()
-                        .size_full()
-                        .object_fit(ObjectFit::Contain),
-                ),
+                Some(picture) => d.child(picture.element()),
                 None => d
                     .px_3()
                     .child(Icon::Film.el(40., theme::text_tertiary()))

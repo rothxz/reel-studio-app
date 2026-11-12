@@ -21,8 +21,12 @@
 //! - `sound`: sound effects
 //! - `produce`: voiceover, captions, music, stickers, drawn scenes, and
 //!   `make_video` (a whole video from one script)
+//! - `board`: a video written scene by scene (the storyboard), any length
+//! - `check`: the timeline looked over, each problem with its fix
 //! - `look`: frames for a vision model
 
+pub mod board;
+pub mod check;
 pub mod edit;
 pub mod look;
 pub mod motion;
@@ -110,6 +114,8 @@ pub struct Env<'a> {
     pub project: Project,
     pub aliases: &'a mut Aliases,
     pub sounds: &'a mut SoundShelf,
+    /// The video being written scene by scene, if one is.
+    pub board: &'a mut Option<board::Board>,
     pub media: &'a [MediaItem],
     pub playhead: Micros,
     pub selected: Option<String>,
@@ -442,6 +448,8 @@ pub fn all() -> Vec<&'static Tool> {
         .chain(motion::TOOLS)
         .chain(sound::TOOLS)
         .chain(produce::TOOLS)
+        .chain(board::TOOLS)
+        .chain(check::TOOLS)
         .chain(look::TOOLS)
         .collect()
 }
@@ -495,6 +503,7 @@ pub mod test_env {
         pub project: Project,
         pub aliases: Aliases,
         pub sounds: SoundShelf,
+        pub board: Option<board::Board>,
         pub media: Vec<MediaItem>,
         pub playhead: Micros,
         pub selected: Option<String>,
@@ -510,6 +519,7 @@ pub mod test_env {
                 project,
                 aliases: Aliases::default(),
                 sounds: SoundShelf::default(),
+                board: None,
                 media: vec![],
                 playhead: 0,
                 selected: None,
@@ -523,6 +533,7 @@ pub mod test_env {
                 project: self.project.clone(),
                 aliases: &mut self.aliases,
                 sounds: &mut self.sounds,
+                board: &mut self.board,
                 media: &self.media,
                 playhead: self.playhead,
                 selected: self.selected.clone(),

@@ -11,7 +11,7 @@
 //! selected clip gets trim handles. The interaction lives in
 //! `timeline_edit.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
@@ -61,9 +61,9 @@ const TILE_WIDTH: f32 = 44.;
 const MAX_TILES: usize = 400;
 /// Source-time grids a tile's frame snaps to, finest first: each divides
 /// the next, so frames picked zoomed out are reused zoomed in.
-const TILE_GRID: [Micros; 10] = [
-    125_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000, 32_000_000,
-    64_000_000,
+const TILE_GRID: [Micros; 12] = [
+    31_250, 62_500, 125_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 8_000_000,
+    16_000_000, 32_000_000, 64_000_000,
 ];
 /// Keeps a snapped frame off the segment's exclusive end.
 const SEGMENT_END_GUARD: Micros = 33_333;
@@ -338,15 +338,16 @@ pub fn transition_seams(clips: &[&Clip]) -> HashMap<String, (Micros, Micros)> {
     seams
 }
 
-/// The coarsest frame grid no wider than a tile's source step (0: too
-/// dense to snap).
+/// The coarsest frame grid no wider than a tile's source step; the finest
+/// one (about a frame) when it's denser still, so tile times never follow
+/// the zoom itself (each zoom step would ask for all-new frames).
 fn tile_grid(step: f64) -> Micros {
     TILE_GRID
         .iter()
         .copied()
         .take_while(|&g| g as f64 <= step)
         .last()
-        .unwrap_or(0)
+        .unwrap_or(TILE_GRID[0])
 }
 
 /// The source time shown `offset` into `clip` (constant speed; reversed
@@ -556,10 +557,15 @@ impl Editor {
             Some(CoverSource::Frame(src, t)) => tiles.push((src, t)),
             None => {}
         }
-        for key in tiles {
-            if !self.tiles.contains_key(&key) && self.tiles_pending.insert(key.clone()) {
-                self.tile_server.request(&key.0, key.1);
-            }
+        // The visible tiles not here yet; sent again only when that set
+        // changes (each send replaces what the filmstrip thread had left).
+        let missing: HashSet<(String, Micros)> = tiles
+            .into_iter()
+            .filter(|key| !self.tiles.contains_key(key))
+            .collect();
+        if missing != self.tiles_pending {
+            self.tile_server.want(missing.iter().cloned().collect());
+            self.tiles_pending = missing;
         }
         for src in stills {
             self.load_thumbnail(src, 0, cx);
@@ -1231,7 +1237,8 @@ impl Editor {
                 if let Some(wave) = self.waveform(clip, g.w, shift, lanes) {
                     content = content.child(wave);
                 }
-                if let Some(dots) = beat_dots(clip, shift, self.pps, lanes) {
+                let lit = self.beat_under_playhead(clip);
+                if let Some(dots) = beat_dots(clip, shift, self.pps, lanes, lit) {
                     content = content.child(dots);
                 }
             }
@@ -1832,12 +1839,15 @@ impl Editor {
 }
 
 /// An audio clip's beat markers as dots along its bottom edge, bigger for
-/// stronger beats (monochrome, like the rest of the editor).
+/// stronger beats (monochrome, like the rest of the editor). `lit`: the
+/// selected clip's beat under the playhead (what Delete beat removes),
+/// drawn bigger in red.
 fn beat_dots(
     clip: &Clip,
     shift: f32,
     pps: f32,
     lanes: Option<Bounds<Pixels>>,
+    lit: Option<Micros>,
 ) -> Option<impl IntoElement + use<>> {
     let beats = clip.beats();
     if beats.is_empty() {
@@ -1856,6 +1866,7 @@ fn beat_dots(
                 for &(t, strength) in &beats {
                     let x = left + (t - start) as f32 / SECOND as f32 * pps;
                     let (r, color) = match strength {
+                        _ if Some(t) == lit => (3.5, theme::danger()),
                         BeatStrength::Weak => (1.6, rgba(0xffffffbf)),
                         BeatStrength::Medium => (2.3, rgba(0xffffffff)),
                         BeatStrength::Strong => (3., rgba(0xffffffff)),
@@ -2011,6 +2022,20 @@ mod tests {
         assert!(times[..9].iter().all(|t| t % 1_000_000 == 0));
         assert_eq!(times[9], 12 * SECOND - SEGMENT_END_GUARD);
         assert!(times[0] >= 2 * SECOND && *times.last().unwrap() < 12 * SECOND);
+    }
+
+    #[test]
+    fn deep_zoom_frames_stay_on_a_grid() {
+        let mut c = clip("v", 0, 10);
+        c.kind = "video".into();
+        // ~400 and ~420 px a second: tiles closer than the 125 ms grid.
+        let (_, a) = filmstrip(&c, 4000.);
+        let (_, b) = filmstrip(&c, 4200.);
+        let on_grid = |t: &Micros| t % 31_250 == 0 || *t == 10 * SECOND - SEGMENT_END_GUARD;
+        assert!(a.iter().all(on_grid) && b.iter().all(on_grid));
+        // A zoom step mostly reuses the frames it already has.
+        let shared = b.iter().filter(|t| a.contains(t)).count();
+        assert!(shared * 2 > b.len(), "{shared} of {}", b.len());
     }
 
     #[test]
