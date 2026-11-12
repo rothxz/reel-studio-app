@@ -119,11 +119,16 @@ src/agent/         the AI agent: providers, keys (keychain), llm (Ollama /
                    by its words or `use_skill`; <data>/skills/*.md), tools
                    (edit, motion: titles + animate, sound: find / add /
                    sound_design, produce: voiceover, captions, music,
-                   stickers, drawn scenes, make_video; look), sfx (app
+                   stickers, drawn scenes, make_video; board: a video
+                   written scene by scene, start_video / write_scene /
+                   build_video, any length; check: check_video, the
+                   timeline's faults each with its fix; look), sfx (app
                    library + Openverse, onset / peak analysis), voice
                    (text to speech: OpenAI / Gemini key, else `say`),
                    captions (timed to the voice's pauses), graphics
-                   (motion-graphic scenes drawn with tiny-skia), movie
+                   (motion-graphic scenes drawn with tiny-skia; canvas:
+                   a scene composed from placed, timed, animated
+                   elements), movie
                    (frames → H.264 MP4), eval (real-model scoring)
 src/face_swap/     AI face swap on this computer: model registry (pinned
                    URLs, SHA-256, licences, download), ONNX Runtime

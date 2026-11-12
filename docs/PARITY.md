@@ -485,6 +485,24 @@ isn't listed.
     the voice's pauses (`agent/captions.rs`), library stickers popping in,
     a music bed under it (looped, faded, low under the voice) and sound
     design on the cuts and titles. Tagged, so asking again replaces it.
+  - [x] Videos of any length, written scene by scene (`agent/tools/board.rs`):
+    `start_video` (settings + an outline, a line per scene), `write_scene`
+    (one scene a call; each answer lists at most two fixes and names the
+    next step), `build_video` (the scenes through `make_video`'s build).
+    The storyboard lasts the chat and rides in the project state, so "change
+    scene 3" is one call and a rebuild; a turn that stops before building
+    is sent back once. Qwen3-VL 4B writes 5-scene, ~67 s videos with it
+    (`eval_make_video`, `REEL_EVAL_DRY=1` skips the drawing).
+  - [x] Composed scenes (`visual: "canvas"`, `agent/graphics/canvas.rs`):
+    text, counting numbers, icons, shapes, bars, cards and joining arrows,
+    each placed, timed, brought in (fade, rise, pop, grow, spin, draw, type,
+    words…), moved, looped and taken out; laid out (stack / row / grid) and
+    timed in turn when not said, and hand-placed words kept apart. Skills
+    `video`, `motion_graphics`, `review`.
+  - [x] `check_video` (`agent/tools/check.rs`): black between clips, sound
+    or words past the end, two voices at once, music over the voice,
+    captions or texts on top of each other, words too quick to read; each
+    with the call that fixes it.
   - [x] The parts on their own: `add_voiceover` (+ captions), `add_captions`,
     `add_music`, `add_sticker`, `add_scene`. Drawn scenes join the media
     library.

@@ -182,6 +182,7 @@ impl Editor {
             project: self.project.clone(),
             aliases: &mut self.agent.aliases,
             sounds: &mut self.agent.sounds,
+            board: &mut self.agent.board,
             media: &self.media,
             playhead: self.playhead,
             selected: self.selected.primary().map(String::from),
@@ -209,6 +210,7 @@ impl Editor {
             project: self.project.clone(),
             aliases: &mut self.agent.aliases,
             sounds: &mut self.agent.sounds,
+            board: &mut self.agent.board,
             media: &self.media,
             playhead: self.playhead,
             selected: self.selected.primary().map(String::from),
@@ -307,7 +309,12 @@ impl Editor {
         self.agent.turn += 1;
         let turn = self.agent.turn;
         let undo_before = self.history.undo_len();
-        let state = self.agent_snapshot();
+        let mut state = self.agent_snapshot();
+        // A video being written scene by scene: a later request can
+        // change one scene of it.
+        if let Some(board) = &self.agent.board {
+            state["storyboard"] = board.summary();
+        }
         let input = TurnInput {
             server,
             system: Message::System(agent::system_prompt(cloud, &all_skills)),
@@ -1227,6 +1234,11 @@ async fn run_turn(
     // An editing tool succeeded this turn; the claim check ran once.
     let mut edited = false;
     let mut nudged = false;
+    // A reply that stopped with a storyboard written but not built, or
+    // with nothing in it at all: each sent back once.
+    let mut storyboarding = false;
+    let mut board_nudged = false;
+    let mut empty_nudged = false;
     // Skills the model loads join the routed ones for the next rounds.
     let mut loaded = t.loaded.clone();
     for _ in 0..t.max_rounds {
@@ -1272,6 +1284,24 @@ async fn run_turn(
             turn_msgs.push(Message::User(agent::NUDGE.into()));
             continue;
         }
+        if reply.calls.is_empty() && storyboarding && !board_nudged {
+            let pending = this
+                .update(cx, |ed, _| {
+                    ed.agent.board.as_ref().and_then(|b| b.pending())
+                })
+                .ok()
+                .flatten();
+            if let Some(pending) = pending {
+                board_nudged = true;
+                turn_msgs.push(Message::User(pending));
+                continue;
+            }
+        }
+        if reply.calls.is_empty() && text.is_empty() && !empty_nudged {
+            empty_nudged = true;
+            turn_msgs.push(Message::User(agent::EMPTY_NUDGE.into()));
+            continue;
+        }
         if !text.is_empty() {
             let _ = this.update(cx, |ed, cx| {
                 ed.agent.items.push(Item::Assistant(text));
@@ -1291,6 +1321,7 @@ async fn run_turn(
                 call.name.clone(),
                 Value::Object(call.arguments.clone()).to_string(),
             ));
+            storyboarding |= matches!(call.name.as_str(), "start_video" | "write_scene");
             if agent::looping(&seen) {
                 return TurnEnd::Failed(
                     "The model kept repeating the same step, so it was stopped. Try a simpler request.".into(),

@@ -67,6 +67,7 @@ fn turn_with(f: &mut Fixture, request: &str, route: bool) -> (Vec<(String, bool)
     let mut calls = vec![];
     let mut seen = vec![];
     let (mut edited, mut nudged) = (false, false);
+    let (mut storyboarding, mut board_nudged, mut empty_nudged) = (false, false, false);
     for _ in 0..super::MAX_LOCAL_ROUNDS {
         let defs = loaded.tools(&all, false);
         let reply = llm::chat(&server, &msgs, &defs).expect("model answers");
@@ -81,6 +82,21 @@ fn turn_with(f: &mut Fixture, request: &str, route: bool) -> (Vec<(String, bool)
                 msgs.push(Message::User(super::NUDGE.into()));
                 continue;
             }
+            if storyboarding
+                && !board_nudged
+                && let Some(pending) = f.board.as_ref().and_then(|b| b.pending())
+            {
+                eprintln!("  (stopped before building: nudged)");
+                board_nudged = true;
+                msgs.push(Message::User(pending));
+                continue;
+            }
+            if reply.content.trim().is_empty() && !empty_nudged {
+                eprintln!("  (an empty reply: nudged)");
+                empty_nudged = true;
+                msgs.push(Message::User(super::EMPTY_NUDGE.into()));
+                continue;
+            }
             return (calls, reply.content);
         }
         for call in reply.calls {
@@ -89,13 +105,25 @@ fn turn_with(f: &mut Fixture, request: &str, route: bool) -> (Vec<(String, bool)
                 Value::Object(call.arguments.clone()).to_string(),
             ));
             assert!(!super::looping(&seen), "looping on {}", call.name);
+            storyboarding |= matches!(call.name.as_str(), "start_video" | "write_scene");
             let args = Value::Object(call.arguments.clone());
             eprintln!("  → {} {}", call.name, args);
             let result = if Loaded::handles(&all, &call.name) {
                 loaded.load_call(&all, &call.name, &call.arguments, false)
+            } else if call.name == "build_video" && std::env::var_os("REEL_EVAL_DRY").is_some() {
+                // The script is what's scored: skip the minute of drawing.
+                match f.board.as_mut() {
+                    Some(b) => super::tools::board::dry_build(b),
+                    None => f.call(&call.name, args),
+                }
             } else {
                 f.call(&call.name, args)
             };
+            if let Ok(v) = &result
+                && (v.get("fix").is_some() || v.get("next").is_some())
+            {
+                eprintln!("    fix {} · next {}", v["fix"], v["next"]);
+            }
             if let Err(e) = &result {
                 eprintln!("    ✗ {}", e.0);
             }
@@ -379,7 +407,23 @@ fn eval_make_video() {
     let (c, a) = turn(&mut f, brief.trim());
     eprintln!("  ← {a}");
     eprintln!("  {:.0} s", t.elapsed().as_secs_f32());
-    assert!(did(&c, "make_video"), "{c:?}");
+    assert!(did(&c, "make_video") || did(&c, "build_video"), "{c:?}");
+    if let Some(board) = &f.board {
+        eprintln!(
+            "  storyboard: {} scenes, about {:.0} s of the {:?} s asked\n{:#}",
+            board.scenes.len(),
+            board.seconds(),
+            board.target(),
+            board.summary()
+        );
+        if std::env::var_os("REEL_EVAL_DRY").is_some() {
+            assert!(
+                board.scenes.len() >= 4 && board.seconds() >= 35.,
+                "a long enough script"
+            );
+            return;
+        }
+    }
     let scenes = f.project.ordered_main_clips().len();
     let voices = f
         .project

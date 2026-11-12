@@ -279,6 +279,13 @@ const TABLE: &[(Icon, &str, bool, &[&str])] = &[
             "natural",
             "vegan",
             "grow",
+            "bee",
+            "flower",
+            "pollinat",
+            "crop",
+            "farm",
+            "insect",
+            "animal",
         ],
     ),
     (
@@ -1294,11 +1301,25 @@ impl Icon {
 
     /// Draws the icon in `r` (a square), its lines `weight` px wide.
     pub fn draw(self, pix: &mut Pixmap, r: Rect, color: Rgb, alpha: f32, weight: f32) {
+        self.draw_placed(pix, r, color, alpha, weight, Transform::identity());
+    }
+
+    /// `draw`, with `r` in a space of its own that `place` puts on the
+    /// picture (an icon scaled or turned about a point).
+    pub fn draw_placed(
+        self,
+        pix: &mut Pixmap,
+        r: Rect,
+        color: Rgb,
+        alpha: f32,
+        weight: f32,
+        place: Transform,
+    ) {
         if alpha <= 0.01 {
             return;
         }
         let size = r.width().min(r.height());
-        let tf = Transform::from_row(size, 0., 0., size, r.left(), r.top());
+        let tf = Transform::from_row(size, 0., 0., size, r.left(), r.top()).post_concat(place);
         let (strokes, fills) = self.paths();
         let stroke = Stroke {
             width: weight / size,

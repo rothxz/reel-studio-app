@@ -22,7 +22,8 @@ use super::{Args, Env, Finish, Outcome, Progress, Tier, Tool, ToolError, ToolRes
 use crate::agent::captions;
 use crate::agent::dice::Dice;
 use crate::agent::graphics::{
-    self, Backdrop, CodeStep, Icon, Item, Layout, Node, PALETTES, Palette, Scene, Visual,
+    self, Backdrop, CodeStep, Flow, Icon, Item, Layout, Node, PALETTES, Palette, Scene, Visual,
+    canvas,
 };
 use crate::agent::snapshot::{Aliases, secs};
 use crate::agent::voice::{self, Speech};
@@ -754,7 +755,15 @@ fn code_steps(raw: &[Value], lines: &[String]) -> Vec<CodeStep> {
 }
 
 /// A scene's visual and its number marks from a call's arguments.
+#[cfg(test)]
 fn read_visual(a: &Args) -> ToolResult<(Visual, String, String)> {
+    read_visual_noted(a).map(|(v, prefix, suffix, _)| (v, prefix, suffix))
+}
+
+/// `read_visual`, with what it read forgivingly or left out (each line
+/// says how to fix it).
+pub(super) fn read_visual_noted(a: &Args) -> ToolResult<(Visual, String, String, Vec<String>)> {
+    let mut notes = vec![];
     let kind = a
         .str("visual")
         .or_else(|| a.str("kind"))
@@ -788,8 +797,41 @@ fn read_visual(a: &Args) -> ToolResult<(Visual, String, String)> {
     } else {
         kind
     };
+    // Elements given with no visual named: that's a canvas.
+    let composed =
+        a.0.get("elements")
+            .and_then(Value::as_array)
+            .is_some_and(|e| !e.is_empty());
+    let kind = if composed && matches!(kind.as_str(), "background" | "backdrop" | "none" | "plain")
+    {
+        "canvas".to_string()
+    } else {
+        kind
+    };
     let visual = match kind.as_str() {
         "background" | "backdrop" | "none" | "plain" => Visual::Background,
+        "canvas" | "compose" | "composed" | "custom" | "free" | "layers" | "elements" => {
+            let raw: Vec<Value> = match a.0.get("elements") {
+                Some(Value::Array(v)) => v.clone(),
+                Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
+                    Ok(Value::Array(v)) => v,
+                    _ => strings(Some(&Value::String(s.clone())))
+                        .into_iter()
+                        .map(Value::String)
+                        .collect(),
+                },
+                _ => raw_items.clone(),
+            };
+            let tech = graphics::technical(&Value::Array(raw.clone()).to_string());
+            let (elements, more) = canvas::read(&raw, tech)?;
+            notes.extend(more);
+            let flow = a
+                .str("arrange")
+                .or_else(|| a.str("layout"))
+                .and_then(|l| Flow::parse(&l))
+                .unwrap_or(Flow::Stack);
+            Visual::Canvas { elements, flow }
+        }
         "bar_chart" | "bars" | "chart" | "bar" => {
             let items: Vec<Item> = raw_items.iter().filter_map(parse_item).take(7).collect();
             if items.is_empty() {
@@ -952,7 +994,7 @@ fn read_visual(a: &Args) -> ToolResult<(Visual, String, String)> {
     } else {
         suffix
     };
-    Ok((visual, prefix, suffix))
+    Ok((visual, prefix, suffix, notes))
 }
 
 /// The palette asked for; None: the caller picks (`any_palette`).
@@ -1277,7 +1319,7 @@ fn add_sticker(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
 // ---- add_scene ---------------------------------------------------------------------------
 
 fn add_scene(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
-    let (visual, prefix, suffix) = read_visual(args)?;
+    let (visual, prefix, suffix, notes) = read_visual_noted(args)?;
     let seed = Dice::fresh_seed();
     let mut dice = Dice::new(seed);
     let tech = visual.technical();
@@ -1322,7 +1364,7 @@ fn add_scene(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
             env.edited("Add Scene");
             let (_, c) = env.clip(&id)?;
             let (s, e) = (secs(c.timeline_start), secs(c.end()));
-            Ok(json!({
+            let mut v = json!({
                 "clip": env.alias(&id),
                 "scene": kind,
                 "palette": scene.palette.name,
@@ -1330,7 +1372,11 @@ fn add_scene(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
                 "start": s,
                 "end": e,
                 "tip": "add_title / add_sticker put words and pictures on it",
-            }))
+            });
+            if !notes.is_empty() {
+                v["fix"] = notes.into();
+            }
+            Ok(v)
         });
         Ok(finish)
     })))
@@ -1398,7 +1444,15 @@ struct Built {
     notes: Vec<String>,
 }
 
+/// Scenes one `make_video` call takes; a storyboard, built up over many
+/// calls, takes more.
+const MAX_SCENES: usize = 14;
+
 fn read_plan(args: &Args, env: &Env) -> ToolResult<Plan> {
+    read_plan_of(args, env, MAX_SCENES)
+}
+
+fn read_plan_of(args: &Args, env: &Env, max_scenes: usize) -> ToolResult<Plan> {
     let raw = match args.0.get("scenes") {
         Some(Value::Array(a)) if !a.is_empty() => a.clone(),
         Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
@@ -1407,8 +1461,8 @@ fn read_plan(args: &Args, env: &Env) -> ToolResult<Plan> {
         },
         _ => return Err("scenes is required: a list of {narration, title, visual…}".into()),
     };
-    if raw.len() > 14 {
-        return Err("At most 14 scenes in one video".into());
+    if raw.len() > max_scenes {
+        return Err(format!("At most {max_scenes} scenes in one video").into());
     }
     let mut scenes = vec![];
     let mut notes = vec![];
@@ -1430,8 +1484,11 @@ fn read_plan(args: &Args, env: &Env) -> ToolResult<Plan> {
             .ok_or_else(|| ToolError(format!("scene {} needs narration", i + 1)))?;
         // A visual with its data missing doesn't stop the video: the scene
         // gets the plain backdrop (its title and narration carry it).
-        let (visual, prefix, suffix) = match read_visual(&a) {
-            Ok(v) => v,
+        let (visual, prefix, suffix) = match read_visual_noted(&a) {
+            Ok((v, prefix, suffix, more)) => {
+                notes.extend(more.into_iter().map(|n| format!("Scene {}: {n}", i + 1)));
+                (v, prefix, suffix)
+            }
             Err(e) => {
                 notes.push(format!(
                     "Scene {}: {} (drawn as a plain backdrop)",
@@ -1594,7 +1651,7 @@ fn build(plan: &Plan, draft: Project, progress: &Progress) -> ToolResult<(Built,
     let beats = plan.scenes.iter().any(|s| {
         matches!(
             s.visual,
-            Visual::Flow { .. } | Visual::Code { .. } | Visual::List { .. }
+            Visual::Flow { .. } | Visual::Code { .. } | Visual::List { .. } | Visual::Canvas { .. }
         )
     });
     let sounds = plan.sfx.clone().map(|style| {
@@ -1774,11 +1831,13 @@ fn build(plan: &Plan, draft: Project, progress: &Progress) -> ToolResult<(Built,
                 // Lay the video out on a copy to read its moments.
                 let mut aliases = Aliases::default();
                 let mut shelf = super::SoundShelf::default();
+                let mut board = None;
                 let layers = |_: Micros| vec![];
                 let mut copy = Env {
                     project: draft,
                     aliases: &mut aliases,
                     sounds: &mut shelf,
+                    board: &mut board,
                     media: &[],
                     playhead: 0,
                     selected: None,
@@ -1911,8 +1970,12 @@ fn assemble(env: &mut Env, plan: &Plan, built: &Built) -> ToolResult<Value> {
             )?;
         }
         // Illustrations popping in.
-        // A diagram or code fills its frame: no stickers over it.
-        let busy = matches!(scene.visual, Visual::Flow { .. } | Visual::Code { .. });
+        // A diagram, code or a composed scene fills its frame: no
+        // stickers over it.
+        let busy = matches!(
+            scene.visual,
+            Visual::Flow { .. } | Visual::Code { .. } | Visual::Canvas { .. }
+        );
         let stickers = if busy {
             vec![]
         } else {
@@ -1989,7 +2052,37 @@ fn assemble(env: &mut Env, plan: &Plan, built: &Built) -> ToolResult<Value> {
 }
 
 fn make_video(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
-    let plan = read_plan(args, env)?;
+    make_video_of(
+        args,
+        env,
+        MAX_SCENES,
+        "Tell the user what you made. Small fixes: edit_text, add_title, add_sticker, add_music, sound_design; a whole redo: make_video again (it replaces this one).",
+    )
+}
+
+/// Whether a video's settings (format, palette, sounds…) read, before any
+/// scene is written.
+pub(super) fn check_settings(args: &Args, env: &Env) -> ToolResult<()> {
+    let mut a = args.0.clone();
+    a.insert("scenes".into(), json!([{ "narration": "x" }]));
+    read_plan(&Args(a), env).map(|_| ())
+}
+
+/// About how long a scene with this narration runs, seconds.
+pub(super) fn spoken_secs(narration: &str) -> f64 {
+    let words = narration.split_whitespace().count() as f64;
+    (words / WORDS_PER_SECOND + secs(LEAD + HOLD)).max(secs(MIN_SCENE))
+}
+
+/// `make_video` for a script of up to `max_scenes` scenes; `next` is what
+/// the result tells the model to do afterwards.
+pub(super) fn make_video_of(
+    args: &Args,
+    env: &mut Env,
+    max_scenes: usize,
+    next: &'static str,
+) -> ToolResult<Outcome> {
+    let plan = read_plan_of(args, env, max_scenes)?;
     let draft = env.project.clone();
     Ok(Outcome::Later(Box::new(move |progress: &Progress| {
         let (built, placed) = build(&plan, draft, progress)?;
@@ -2016,7 +2109,7 @@ fn make_video(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
             if !notes.is_empty() {
                 v["notes"] = notes.into();
             }
-            v["next"] = "Tell the user what you made. Small fixes: edit_text, add_title, add_sticker, add_music, sound_design; a whole redo: make_video again (it replaces this one).".into();
+            v["next"] = next.into();
             Ok(v)
         });
         Ok(finish)
@@ -2025,8 +2118,15 @@ fn make_video(args: &Args, env: &mut Env) -> ToolResult<Outcome> {
 
 // ---- the table ------------------------------------------------------------------------------
 
-fn scene_props(with_narration: bool) -> Map<String, Value> {
-    let kinds: Vec<&str> = graphics::KINDS.iter().map(|(k, _)| *k).collect();
+/// A scene's arguments. `composed`: with the free canvas and its elements
+/// (left out of `make_video`: one call for a whole video is already as much
+/// as a small model writes well).
+pub(super) fn scene_props(with_narration: bool, composed: bool) -> Map<String, Value> {
+    let kinds: Vec<&str> = graphics::KINDS
+        .iter()
+        .map(|(k, _)| *k)
+        .filter(|k| composed || *k != "canvas")
+        .collect();
     let strings =
         |d: &str| json!({ "type": "array", "items": { "type": "string" }, "description": d });
     let mut p = Map::new();
@@ -2121,6 +2221,63 @@ fn scene_props(with_narration: bool) -> Map<String, Value> {
         "suffix".into(),
         json!({ "type": "string", "description": "After every number, e.g. %" }),
     );
+    if composed {
+        let text = |d: &str| json!({ "type": "string", "description": d });
+        let pick =
+            |names: &[&str], d: &str| json!({ "type": "string", "enum": names, "description": d });
+        let number = |d: &str| json!({ "type": "number", "description": d });
+        p.insert(
+            "elements".into(),
+            json!({
+                "type": "array",
+                "description": "canvas: what's on screen, in the order it appears. Each element is ONE of text, number, icon, shape, bar, card, line, plus how it looks, where it sits and how it moves. Leave out at / start and it is laid out and timed for you.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": text("Words on screen"),
+                        "number": number("A number counting up to this (with prefix / suffix, from)"),
+                        "icon": pick(&Icon::names(), "A line icon in a disc"),
+                        "shape": pick(canvas::SHAPES, "A plain shape"),
+                        "bar": number("A progress bar filled to this percent"),
+                        "card": text("A panel with these words (and detail, icon)"),
+                        "line": { "type": "array", "items": { "type": "string" }, "description": "An arrow joining two elements by id: [\"a\", \"b\"]" },
+                        "label": text("A small line under a number, icon or shape; over a bar"),
+                        "detail": text("card: a second, smaller line"),
+                        "prefix": text("number: before it, e.g. $"),
+                        "suffix": text("number: after it, e.g. %"),
+                        "id": text("A name lines can join"),
+                        "size": text("hero, large, medium, small or tiny"),
+                        "color": text("accent, accent2, accent3, text, muted or #rrggbb"),
+                        "at": text("Its centre on the stage: \"x,y\" each 0–1 (\"0.5,0.2\"), or center, top, bottom, left, right, top_left, top_right, bottom_left, bottom_right"),
+                        "start": number("Seconds into the scene it comes in"),
+                        "end": number("Seconds into the scene it leaves (default: stays)"),
+                        "in": pick(canvas::ENTRANCES, "How it comes in (default: words rise, icons pop, lines draw, numbers count)"),
+                        "out": pick(canvas::EXITS, "How it leaves"),
+                        "loop": pick(canvas::LOOPS, "A motion it keeps once landed"),
+                        "moves": {
+                            "type": "array",
+                            "description": "Later changes: from `at` seconds, over `duration`, it goes to x / y (0–1), scale, rotate (degrees), opacity",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "at": number("Seconds into the scene"),
+                                    "duration": number("Seconds (0.6)"),
+                                    "x": number("0–1"), "y": number("0–1"),
+                                    "scale": number("1 = its size"),
+                                    "rotate": number("Degrees"),
+                                    "opacity": number("0–1")
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+        p.insert(
+            "arrange".into(),
+            pick(canvas::FLOWS, "canvas: how elements with no \"at\" are laid out (default stack: one under another)"),
+        );
+    }
     p
 }
 
@@ -2146,13 +2303,13 @@ fn backdrops_enum() -> Value {
     })
 }
 
-fn make_video_params() -> Value {
+/// What a whole video is set to (everything of `make_video` but its
+/// scenes).
+pub(super) fn video_props() -> Map<String, Value> {
     let caption_styles: Vec<&str> = CAPTION_STYLES.iter().map(|(s, _)| *s).collect();
     let mut sfx: Vec<&str> = sound::STYLES.iter().map(|(s, _)| *s).collect();
     sfx.push("none");
-    json!({
-        "type": "object",
-        "properties": {
+    let v = json!({
             "title": { "type": "string", "description": "The video's name" },
             "duration": { "type": "number", "description": "Seconds the user asked for (e.g. 75); narration runs about 2.5 words a second" },
             "format": { "type": "string", "enum": ["9:16", "16:9", "1:1", "4:5"], "description": "Default 9:16 (Reels, Shorts, TikTok)" },
@@ -2165,18 +2322,28 @@ fn make_video_params() -> Value {
             "sound_effects": { "type": "string", "enum": sfx, "description": "Default subtle" },
             "captions": { "type": "boolean", "description": "Subtitles on the narration (default true)" },
             "caption_style": { "type": "string", "enum": caption_styles },
-            "scenes": {
-                "type": "array",
-                "description": "In order. A 60–90 s video is 6–8 scenes of 25–40 words of narration each (about 2.5 words a second).",
-                "items": { "type": "object", "properties": scene_props(true), "required": ["narration"] }
-            }
-        },
-        "required": ["scenes"]
-    })
+    });
+    match v {
+        Value::Object(m) => m,
+        _ => Map::new(),
+    }
+}
+
+fn make_video_params() -> Value {
+    let mut props = video_props();
+    props.insert(
+        "scenes".into(),
+        json!({
+            "type": "array",
+            "description": "In order. A 60–90 s video is 6–8 scenes of 25–40 words of narration each (about 2.5 words a second).",
+            "items": { "type": "object", "properties": scene_props(true, false), "required": ["narration"] }
+        }),
+    );
+    json!({ "type": "object", "properties": props, "required": ["scenes"] })
 }
 
 fn add_scene_params() -> Value {
-    let mut p = scene_props(false);
+    let mut p = scene_props(false, true);
     p.insert("palette".into(), palettes_enum());
     p.insert("backdrop".into(), backdrops_enum());
     p.insert(
@@ -2283,7 +2450,7 @@ pub static TOOLS: &[Tool] = &[
         name: "add_scene",
         tier: Tier::Full,
         label: "Scene",
-        description: "Draws a motion-graphic scene on the main lane: an animated backdrop (glow, grid, dots, beams), alone or with a growing bar_chart, a counter, a line_chart, a comparison (two columns), steps, a flow diagram (nodes lighting up in turn along animated connectors) or code (an editor highlighting each step). Numbers count up; prefix/suffix mark them ($, %).",
+        description: "Draws a motion-graphic scene on the main lane: an animated backdrop (glow, grid, dots, beams), alone or with a growing bar_chart, a counter, a line_chart, a comparison (two columns), steps, a flow diagram (nodes lighting up in turn along animated connectors), code (an editor highlighting each step), or a canvas you compose from elements (words, numbers, icons, shapes, bars, cards, joining lines), each placed, timed and animated. Numbers count up; prefix/suffix mark them ($, %).",
         params: add_scene_params,
         run: add_scene,
     },
@@ -2358,6 +2525,7 @@ mod tests {
             project: f.project.clone(),
             aliases: &mut f.aliases,
             sounds: &mut f.sounds,
+            board: &mut f.board,
             media: &[],
             playhead: 0,
             selected: None,
@@ -2425,6 +2593,7 @@ mod tests {
             project: f.project.clone(),
             aliases: &mut f.aliases,
             sounds: &mut f.sounds,
+            board: &mut f.board,
             media: &[],
             playhead: 0,
             selected: None,
@@ -2471,6 +2640,9 @@ mod tests {
             "everything is tagged"
         );
         assert_eq!(v["scenes"].as_array().unwrap().len(), 3);
+        // What the agent makes passes its own check.
+        let found = super::super::check::issues(&p, &mut Aliases::default()).0;
+        assert!(found.is_empty(), "{found:?}");
 
         // Again: the first attempt is replaced, not stacked.
         let v = assemble(&mut env, &plan, &built).unwrap();
@@ -2705,6 +2877,44 @@ mod tests {
         };
         assert_eq!((steps[0].from, steps[0].to), (2, 2));
         assert_eq!((steps[1].from, steps[1].to), (4, 5));
+    }
+
+    #[test]
+    fn a_scene_can_be_composed() {
+        let a = |v: Value| Args(v.as_object().unwrap().clone());
+        let (v, _, _, notes) = read_visual_noted(&a(json!({
+            "visual": "canvas",
+            "arrange": "row",
+            "elements": [
+                { "icon": "bulb", "label": "Idea", "id": "a" },
+                { "icon": "rocket", "label": "Launch", "id": "b" },
+                { "line": ["a", "b"] },
+                { "text": "Ship it", "in": "sideways" },
+            ],
+        })))
+        .unwrap();
+        let Visual::Canvas { elements, flow } = &v else {
+            panic!("{v:?}")
+        };
+        assert_eq!((elements.len(), *flow), (4, Flow::Row));
+        assert!(notes[0].contains("no entrance \"sideways\""), "{notes:?}");
+        // Elements alone say canvas; make_video carries the notes by scene.
+        let (v, _, _) = read_visual(&a(json!({ "elements": ["One", "Two"] }))).unwrap();
+        assert_eq!(v.kind(), "canvas");
+        let mut f = Fixture::new(Project::empty());
+        let plan = plan_for(
+            &mut f,
+            json!({ "scenes": [
+                { "narration": "First." },
+                { "narration": "Second.", "elements": [{ "text": "Hi", "color": "plaid" }] },
+            ] }),
+        );
+        assert_eq!(plan.scenes[1].visual.kind(), "canvas");
+        assert!(plan.notes[0].starts_with("Scene 2: "), "{:?}", plan.notes);
+        // make_video's own schema stays the short one.
+        let params = make_video_params().to_string();
+        assert!(!params.contains("\"elements\""));
+        assert!(add_scene_params().to_string().contains("\"elements\""));
     }
 
     #[test]

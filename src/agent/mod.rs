@@ -63,9 +63,10 @@ use snapshot::Aliases;
 use tools::{Progress, SoundShelf};
 
 /// Model calls per turn before it's stopped (a small model can loop).
-pub const MAX_LOCAL_ROUNDS: usize = 16;
+/// A storyboard is a call per scene: a dozen scenes and their fixes fit.
+pub const MAX_LOCAL_ROUNDS: usize = 28;
 /// A cloud model builds whole edits: many more steps, and it doesn't loop.
-pub const MAX_CLOUD_ROUNDS: usize = 40;
+pub const MAX_CLOUD_ROUNDS: usize = 60;
 /// Conversation kept between turns (messages, not counting the system's).
 const HISTORY_LIMIT: usize = 30;
 /// A local model's context is small: long tool results are cut to this.
@@ -223,6 +224,8 @@ pub struct Agent {
     pub turn: u64,
     pub aliases: Aliases,
     pub sounds: SoundShelf,
+    /// The video being written scene by scene (`tools/board.rs`).
+    pub board: Option<tools::board::Board>,
     /// Video effect names fetched for the agent (the catalog's are added).
     pub effect_names: Vec<String>,
     /// The connected server's models.
@@ -251,6 +254,7 @@ impl Agent {
             turn: 0,
             aliases: Aliases::default(),
             sounds: SoundShelf::default(),
+            board: None,
             effect_names: vec![],
             models: vec![],
             connecting: false,
@@ -270,6 +274,7 @@ impl Agent {
         self.turn += 1;
         self.aliases = Aliases::default();
         self.sounds = SoundShelf::default();
+        self.board = None;
         self.last_turn = None;
     }
 }
@@ -289,7 +294,8 @@ Timeline basics:
 - Each request comes with the project state. Your edits since then show in the tool results; call get_project for the whole timeline again.
 
 You can make things, not just edit them:
-- make_video makes a whole video from nothing in ONE call: a narrator's voice, animated motion-graphic scenes (charts, counters, comparisons, steps, flow diagrams, code), titles, captions, sticker illustrations, music and sound effects. When asked to make, generate or create a video about something, write the script yourself and call make_video. Never say you can't make videos.
+- make_video makes a whole short video from nothing in ONE call: a narrator's voice, animated motion-graphic scenes (charts, counters, comparisons, steps, flow diagrams, code), titles, captions, sticker illustrations, music and sound effects. When asked to make, generate or create a video about something, write the script yourself and call make_video. Never say you can't make videos.
+- A video of 30 seconds or more is written scene by scene instead, so it can be any length: the video skill (start_video, then write_scene for each scene, then build_video).
 - add_voiceover speaks words in a real voice, with captions timed to it. add_music lays a music bed under the video.
 - sound_design adds real sound effects to the whole edit in one call (cuts, titles, text, stickers, effects). find_sounds + add_sound place a single sound.
 - add_title makes an animated title (motion graphics): pop, slide_up, typewriter, word_by_word, lower_third, headline, neon, countdown.
@@ -309,6 +315,7 @@ pub const LOCAL_EXAMPLES: &str = "
 
 Examples of requests and the call that does them:
 - \"make a short video about saving water\" → make_video {\"title\": \"Save water\", \"duration\": 10, \"scenes\": [{\"narration\": \"Every drop counts.\", \"title\": \"Every drop counts\", \"stickers\": [\"water drop\"]}, {\"narration\": \"A running tap wastes six liters a minute.\", \"title\": \"6 L a minute\", \"visual\": \"counter\", \"to\": 6, \"suffix\": \" L\"}, {\"narration\": \"Turn it off while you brush.\", \"title\": \"Turn it off\"}]}
+- \"make a 60 second video about sleep\" → the video skill: start_video {\"duration\": 60, \"outline\": [\"Hook\", \"…\"]}, then write_scene for each scene, then build_video {}
 - \"add a voiceover saying welcome to my channel\" → add_voiceover {\"text\": \"Welcome to my channel!\"}
 - \"add some chill music\" → add_music {\"mood\": \"chill\"}
 - \"add sound effects\" → sound_design {}
@@ -332,13 +339,16 @@ The whole timeline is yours to work with:
 - get_clip shows everything about one clip. add_keyframe animates by hand (two or more times); animate does ready motions.
 - Plan bigger requests (\"make a highlight reel\", \"a title on every scene\", \"make this feel like a trailer\") as a sequence of calls and carry it through without asking at each step; look at the video first when the content matters. A finished edit usually wants titles, motion, a colour look and sound design.
 - Several independent calls can go in one reply; calls that need an earlier result (new ids after split_clip) wait for it.
+- Before you say a bigger edit or a made video is finished, call check_video and make the fixes it lists.
 
-Making a video from a prompt (make_video):
+Making a video from a prompt:
+- Up to about 30 s: make_video, once, with everything. Longer, or when its scenes deserve composing: start_video (with an outline: a line per scene), write_scene for each scene, then build_video. Several write_scene calls can go in one reply. Each answer lists what to fix and the next step.
+- A scene no ready graphic shows is a canvas: write_scene / add_scene with visual \"canvas\" and the elements you compose (words, numbers, icons, shapes, bars, cards, joining lines), each placed, timed and animated. Load the motion_graphics skill for how.
 - Write the script first, in your head: a hook, the scenes the user asked for, a memorable ending. Spoken English runs about 2.5 words a second, so 60–90 s is 150–220 words of narration: 6–8 scenes of 2–4 sentences (25–40 words) each. Scene length follows its narration.
 - Every scene: narration (spoken, conversational), title (the on-screen key point, 2–6 words), and the visual that fits: numbers → bar_chart, counter or line_chart (real, plausible figures, with prefix \"$\" for money); a contrast → comparison; how-to → steps; how something works (a system, a pipeline, a process, cause and effect) → flow, its nodes in order with a note each that follows the narration (the narration walks through the nodes as they light up); programming → code with a step per block; otherwise background with 1–2 stickers (concrete things: \"coffee cup\", \"piggy bank\", \"calendar\"). Mix kinds across scenes; don't repeat one visual scene after scene. For tech topics palette neon or blueprint fits.
 - Pick a palette that suits the topic, a music mood, and a tone for the voice. Captions are on by default.
-- Pass duration (seconds) when the user asked for a length. Call make_video once with everything. It takes a minute (voices, drawing, downloads). Then say what you made, scene by scene in a line or two, and mention any notes it returned (like the voice being the computer's own).
-- The user's own footage: if the media library has clips that fit, add them with add_media after make_video and move them to an overlay, or skip make_video and edit their footage with add_voiceover, add_title, add_music and sound_design.";
+- Pass duration (seconds) when the user asked for a length. Building takes a minute (voices, drawing, downloads). Then say what you made, scene by scene in a line or two, and mention any notes it returned (like the voice being the computer's own).
+- The user's own footage: if the media library has clips that fit, add them with add_media after the video is built and move them to an overlay, or make no video and edit their footage: look at it first, cut it, then add_voiceover, add_title, add_music and sound_design.";
 
 /// The fixed instructions, the skills' list last.
 pub fn system_prompt(cloud: bool, skills: &[skills::Skill]) -> String {
@@ -382,8 +392,12 @@ pub fn trim_history(mut messages: Vec<Message>) -> Vec<Message> {
 }
 
 /// Tools that only read (or move the playhead): no edit.
-pub const READ_ONLY: [&str; 8] = [
+pub const READ_ONLY: [&str; 11] = [
     "get_project",
+    "check_video",
+    // The storyboard is a script, not an edit: only build_video edits.
+    "start_video",
+    "write_scene",
     skills::USE_SKILL,
     "get_clip",
     "look",
@@ -396,6 +410,9 @@ pub const READ_ONLY: [&str; 8] = [
 /// Sent back once when a reply says it changed the project but no editing
 /// tool ran: small models "answer" an edit instead of making it.
 pub const NUDGE: &str = "Nothing in the project has changed yet: you haven't called a tool that edits it in this request. Call the tool now to make the edit you described (for example add_title, sound_design, animate, split_clip), or say plainly that you can't.";
+
+/// Sent back once when a reply is empty: no words and no tool call.
+pub const EMPTY_NUDGE: &str = "You answered with nothing. Carry on with the request: call the next tool, or say in a sentence what you did.";
 
 /// Does this answer claim an edit was made?
 pub fn claims_edit(text: &str) -> bool {
@@ -466,6 +483,37 @@ pub fn describe_result(v: &serde_json::Value) -> String {
     };
     if o.contains_key("instructions") {
         return "Loaded".into();
+    }
+    if o.contains_key("storyboard") {
+        return match o.get("scenes_planned").and_then(|n| n.as_u64()) {
+            Some(n) => format!("{n} scenes planned"),
+            None => "Started".into(),
+        };
+    }
+    if let (Some(n), Some(total)) = (
+        o.get("scene").and_then(|n| n.as_u64()),
+        o.get("total_seconds").and_then(|t| t.as_f64()),
+    ) {
+        let fixes = o.get("fix").and_then(|f| f.as_array()).map_or(0, Vec::len);
+        return format!(
+            "Scene {n} · {total:.0}s so far{}",
+            if fixes > 0 {
+                format!(" · {fixes} to fix")
+            } else {
+                String::new()
+            }
+        );
+    }
+    if let Some(ok) = o.get("ok").and_then(|b| b.as_bool()) {
+        let n = o
+            .get("issues")
+            .and_then(|i| i.as_array())
+            .map_or(0, Vec::len);
+        return if ok {
+            "No problems".into()
+        } else {
+            format!("{n} problem{}", if n == 1 { "" } else { "s" })
+        };
     }
     if let Some(scenes) = o.get("scenes").and_then(|s| s.as_array()) {
         let d = o.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.);
