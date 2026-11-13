@@ -4,11 +4,12 @@
 //! nothing here shows there. On Windows the title bar is ours (it's hidden
 //! for the header): we draw minimize / maximize / close and mark the
 //! header's empty space as the caption, so moving, snapping and double-click
-//! maximize are the system's own. On Linux the compositor usually decorates
-//! the window (X11, KDE); where it asks the app to (client-side
-//! decorations: GNOME on Wayland) we draw the same buttons, move the window
-//! from the empty space and add resize edges. Neither has a menu bar, so a
-//! ☰ button opens the app menu (built from the same menus macOS shows).
+//! maximize are the system's own. On Linux the window asks for client-side
+//! decorations (main.rs: GNOME on Wayland draws none of its own), so we
+//! draw the same buttons, move the window from the empty space and add
+//! resize edges; only X11 without a compositor keeps the system's. Neither
+//! has a menu bar, so a ☰ button opens the app menu (built from the same
+//! menus macOS shows).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
