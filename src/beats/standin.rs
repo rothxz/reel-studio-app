@@ -10,7 +10,7 @@
 //! period after the last) → bars where the low band hits hardest every
 //! fourth beat, offbeats where a real hit falls halfway.
 
-#![cfg_attr(feature = "cpp-engine", allow(dead_code))]
+#![cfg_attr(reel_cpp_engine, allow(dead_code))]
 
 use super::{Analysis, WireBeat};
 use crate::model::{Micros, SECOND};

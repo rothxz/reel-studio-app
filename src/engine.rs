@@ -20,7 +20,7 @@ pub enum LayerKind {
 
 impl LayerKind {
     /// The stand-in engine reads kinds from the document.
-    #[cfg_attr(feature = "cpp-engine", allow(dead_code))]
+    #[cfg_attr(reel_cpp_engine, allow(dead_code))]
     fn of(kind: &str) -> Self {
         match kind {
             "video" => LayerKind::Video,
@@ -47,7 +47,7 @@ pub struct ActiveLayer {
     pub kind: LayerKind,
 }
 
-#[cfg(feature = "cpp-engine")]
+#[cfg(reel_cpp_engine)]
 mod imp {
     use super::*;
     use std::ffi::{CStr, CString, c_char};
@@ -275,7 +275,7 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "cpp-engine"))]
+#[cfg(not(reel_cpp_engine))]
 mod imp {
     use super::*;
     use crate::model::TrackType;
@@ -444,7 +444,7 @@ mod tests {
     use crate::model::{MediaItem, SECOND};
 
     /// Classic filters come from the engine's preset table.
-    #[cfg(feature = "cpp-engine")]
+    #[cfg(reel_cpp_engine)]
     #[test]
     fn classic_filter_matrices() {
         assert!(filter_color_matrix("VHS", 100.).is_some());
@@ -519,7 +519,7 @@ mod tests {
         e.load(&p).expect("engine parses the ramp");
         let half = e.active_layers(clip.timeline_duration / 2);
         assert_eq!(half.len(), 1);
-        if cfg!(feature = "cpp-engine") {
+        if cfg!(reel_cpp_engine) {
             assert!(half[0].source_time > 2 * SECOND, "{}", half[0].source_time);
         }
         // A constant speed drops the ramp.

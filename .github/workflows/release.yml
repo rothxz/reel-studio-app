@@ -229,6 +229,7 @@ jobs:
       - name: Build
         env:
           REEL_VERSION: ${{ env.VERSION }}
+          REEL_REQUIRE_ENGINE: "1"
           REEL_ENGINE_DIR: ${{ github.workspace }}/reel-studio/modules/video-engine/cpp
           REEL_APP_DIR: ${{ github.workspace }}/reel-studio
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
@@ -401,6 +402,7 @@ jobs:
       - name: Build
         env:
           REEL_VERSION: ${{ env.VERSION }}
+          REEL_REQUIRE_ENGINE: "1"
           REEL_ENGINE_DIR: ${{ github.workspace }}/reel-studio/modules/video-engine/cpp
           REEL_APP_DIR: ${{ github.workspace }}/reel-studio
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}
@@ -559,6 +561,7 @@ jobs:
       - name: Build
         env:
           REEL_VERSION: ${{ env.VERSION }}
+          REEL_REQUIRE_ENGINE: "1"
           REEL_ENGINE_DIR: ${{ github.workspace }}/reel-studio/modules/video-engine/cpp
           REEL_APP_DIR: ${{ github.workspace }}/reel-studio
           REEL_ASSETS_URL: ${{ secrets.REEL_ASSETS_URL }}

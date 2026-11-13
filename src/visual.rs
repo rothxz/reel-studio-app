@@ -602,7 +602,7 @@ fn upsert(track: &mut Value, t: Micros, value: f64, eps: Micros) {
 
 /// A property's keyframes at clip-local `t`, interpolated linearly (holds
 /// hold): the stand-in engine's answer; the C++ engine eases.
-#[cfg_attr(feature = "cpp-engine", allow(dead_code))]
+#[cfg_attr(reel_cpp_engine, allow(dead_code))]
 pub fn linear_track_value(clip: &Clip, property: &str, t: Micros) -> Option<f64> {
     let track = clip.tracks().iter().find(|tr| {
         live_track(tr) && tr.get("property").and_then(Value::as_str) == Some(property)

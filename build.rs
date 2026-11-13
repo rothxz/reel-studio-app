@@ -2,7 +2,9 @@
 // copied here:
 //
 // - The shared C++ engine core, linked with `--features cpp-engine`: point
-//   REEL_ENGINE_DIR at its modules/video-engine/cpp folder.
+//   REEL_ENGINE_DIR at its modules/video-engine/cpp folder. Optional: when
+//   it is missing the app builds on the Rust stand-in engine (a warning),
+//   unless REEL_REQUIRE_ENGINE=1 (the release build) makes that an error.
 // - The app's public client config and the filter list, read from the app
 //   checkout at REEL_APP_DIR: the asset host (tile previews on R2), the
 //   catalog database's URL and publishable key (the served effects table),
@@ -22,13 +24,31 @@ fn main() {
     static_ffmpeg();
     windows_resources();
     ort_dynamic();
+    println!("cargo:rerun-if-env-changed=REEL_REQUIRE_ENGINE");
+    println!("cargo::rustc-check-cfg=cfg(reel_cpp_engine)");
     if std::env::var_os("CARGO_FEATURE_CPP_ENGINE").is_none() {
         return;
     }
-    let dir = std::env::var("REEL_ENGINE_DIR").expect(
-        "the cpp-engine feature needs REEL_ENGINE_DIR=<reel-studio>/modules/video-engine/cpp",
-    );
-    let dir = PathBuf::from(dir);
+    // The engine is optional: without a checkout the app builds on the Rust
+    // stand-in, with a warning. REEL_REQUIRE_ENGINE=1 (release builds) makes
+    // a missing engine an error instead.
+    let dir = std::env::var_os("REEL_ENGINE_DIR").map(PathBuf::from);
+    let sources = dir
+        .as_ref()
+        .and_then(|d| std::fs::read_dir(d.join("src")).ok());
+    let (Some(dir), Some(sources)) = (dir, sources) else {
+        let msg = "no C++ engine at REEL_ENGINE_DIR (<reel-studio>/modules/video-engine/cpp): \
+                   building on the Rust stand-in engine";
+        if std::env::var_os("REEL_REQUIRE_ENGINE").is_some_and(|v| !v.is_empty() && v != "0") {
+            panic!("{msg} (REEL_REQUIRE_ENGINE is set)");
+        }
+        println!("cargo:warning={msg}");
+        if let Some(dir) = std::env::var_os("REEL_ENGINE_DIR") {
+            // Rebuild once the checkout shows up.
+            println!("cargo:rerun-if-changed={}", PathBuf::from(dir).display());
+        }
+        return;
+    };
     let mut build = cc::Build::new();
     build
         .cpp(true)
@@ -46,7 +66,7 @@ fn main() {
             .flag("/utf-8")
             .flag("/Zc:lambda");
     }
-    for entry in std::fs::read_dir(dir.join("src")).expect("REEL_ENGINE_DIR/src") {
+    for entry in sources {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "cpp") {
             println!("cargo:rerun-if-changed={}", path.display());
@@ -54,6 +74,7 @@ fn main() {
         }
     }
     build.compile("reel_engine");
+    println!("cargo:rustc-cfg=reel_cpp_engine");
 }
 
 /// Config + filter catalog from the app checkout (see the top comment).
