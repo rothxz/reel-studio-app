@@ -45,7 +45,7 @@ mod visual;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions, point, prelude::*, px, size,
+    WindowDecorations, WindowOptions, point, prelude::*, px, size,
 };
 
 use editor::*;
@@ -214,6 +214,12 @@ fn open_main_window(cx: &mut App, first: bool) {
             window_min_size: Some(size(px(960.), px(600.))),
             // Linux: the window's class, matching reel-studio.desktop.
             app_id: Some("reel-studio".into()),
+            // Linux: we draw the title-bar buttons, move and resize areas
+            // (ui/window_chrome.rs). Left unset, gpui asks for server-side
+            // decorations, which GNOME on Wayland never draws: the window
+            // then had no buttons and could not be moved or resized. X11
+            // without a compositor still falls back to the system's.
+            window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
             ..Default::default()
         },
         |window, cx| {

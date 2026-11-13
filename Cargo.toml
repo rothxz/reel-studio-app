@@ -87,7 +87,8 @@ cc = "1.11.1"
 embed-resource = "3"
 
 [features]
-# Link the shared C++ engine core from the main repo (needs REEL_ENGINE_DIR).
+# Link the shared C++ engine core from the main repo (REEL_ENGINE_DIR); without
+# a checkout it falls back to the Rust stand-in (REEL_REQUIRE_ENGINE=1: error).
 cpp-engine = []
 # Build the portable (wgpu) preview renderer on macOS too, and run its
 # tests there: `cargo test --features wgpu-effects`. The app still draws
